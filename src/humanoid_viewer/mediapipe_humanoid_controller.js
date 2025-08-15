@@ -10,6 +10,7 @@ export class MediaPipeHandController { // Consider renaming this to MediaPipePos
         this.videoInput = document.getElementById('videoInput'); // New: Reference to video file input
         this.playVideoButton = document.getElementById('playVideoButton'); // New: Reference to play video button
         this.useWebcamButton = document.getElementById('useWebcamButton'); // New: Reference to use webcam button
+        this.pauseVideoButton = document.getElementById('pauseVideoButton'); // NEW: Reference to pause video button
         this.videoWrapper = document.getElementById('videoWrapper'); // New: Reference to video input wrapper
 
         this.currentVideoSource = 'webcam'; // 'webcam' or 'uploaded'
@@ -21,28 +22,76 @@ export class MediaPipeHandController { // Consider renaming this to MediaPipePos
         this.lastVideoTime = -1;
         this.animationFrameId = null; // To store the ID of the requestAnimationFrame
         this.videoStream = null; // To store the webcam stream for stopping it
-
+        this.frameCounter = 0;
         // Store previous joint values for smoothing
         this.previousJointValues = {};
-        this.debugMode = true; // Keep debugMode enabled for detailed logs during testing
+        this.debugMode = false; // Keep debugMode enabled for detailed logs during testing
+         
+         this.POSE = {
+            NOSE: 0,
+            LEFT_EYE_INNER: 1,
+            LEFT_EYE: 2,
+            LEFT_EYE_OUTER: 3,
+            RIGHT_EYE_INNER: 4,
+            RIGHT_EYE: 5,
+            RIGHT_EYE_OUTER: 6,
+            LEFT_EAR: 7,
+            RIGHT_EAR: 8,
+            MOUTH_LEFT: 9,
+            MOUTH_RIGHT: 10,
+            LEFT_SHOULDER: 11,
+            RIGHT_SHOULDER: 12,
+            LEFT_ELBOW: 13,
+            RIGHT_ELBOW: 14,
+            LEFT_WRIST: 15,
+            RIGHT_WRIST: 16,
+            LEFT_PINKY_KNUCKLE: 17,
+            RIGHT_PINKY_KNUCKLE: 18,
+            LEFT_INDEX_KNUCKLE: 19,
+            RIGHT_INDEX_KNUCKLE: 20,
+            LEFT_THUMB_KNUCKLE: 21,
+            RIGHT_THUMB_KNUCKLE: 22,
+            LEFT_HIP: 23,
+            RIGHT_HIP: 24,
+            LEFT_KNEE: 25,
+            RIGHT_KNEE: 26,
+            LEFT_ANKLE: 27,
+            RIGHT_ANKLE: 28,
+            LEFT_HEEL: 29,
+            RIGHT_HEEL: 30,
+            LEFT_FOOT_INDEX: 31,
+            RIGHT_FOOT_INDEX: 32
+        };
+
 
         // Define the robot's initial (default) pose for all controlled joints
         this.initialRobotPose = {
-            'l_shoulder_x': 0,
-            'l_shoulder_y': 0,
-            'l_arm_z': 0,
-            'l_elbow_y': 0.02, // Straight position for left elbow
-            'r_shoulder_x': 0,
-            'r_shoulder_y': 0,
-            'r_arm_z': 0,
-            'r_elbow_y': -0.02, // Straight position for right elbow
-            'head_z': 0,
-            'head_y': 0,
-            'r_hip_y': 0, // Added for right leg
-            'r_knee_y': 0, // Added for right leg
-            'l_hip_y': 0, // Added for left leg
-            'l_knee_y': 0  // Added for left leg
-        };
+    // Existing arm and head joints (confirm their initial values are correct for a default pose)
+    'l_shoulder_x': 0,
+    'l_shoulder_y': 0,
+    'l_arm_z': 0,
+    'l_elbow_y': 0, // Straight position for left elbow
+    'r_shoulder_x': 0,
+    'r_shoulder_y': 0,
+    'r_arm_z': 0,
+    'r_elbow_y': 0, // Straight position for right elbow
+    'head_z': 0,
+    'head_y': 0,
+    // Existing leg joints
+    'r_hip_y': 0, // Added for right leg
+    'r_knee_y': 0, // Added for right leg
+    'l_hip_y': 0, // Added for left leg
+    'l_knee_y': 0, // Added for left leg
+
+    // --- NEW: Torso (ABS) and Base Joints ---
+    'abs_x': 0.0, // Initial value for side bend (0.0 for no bend)
+    'abs_y': 0.0, // Initial value for forward/backward lean (0.0 for upright)
+    'abs_z': 0.0, // Initial value for torso twist (0.0 for no twist)
+
+    'base_x': 0.0, // Initial horizontal position (0.0 for centered)
+    'base_y': 0.0, // Initial vertical position (0.0 for neutral/ground)
+    'base_z': 0.0, // Initial depth position (0.0 for neutral depth)
+};
 
         // History for arm length for foreshortening detection
         this.armLengthHistory_L = [];
@@ -64,6 +113,8 @@ export class MediaPipeHandController { // Consider renaming this to MediaPipePos
             },
             runningMode: this.runningMode,
             numPoses: 1 // Only need to detect one person
+             //minPoseDetectionConfidence: 0.4, // <-- Add this line
+             //minTrackingConfidence: 0.4,    // <-- Add this line
         });
 
         console.log("MediaPipe PoseLandmarker initialized.");
@@ -78,10 +129,12 @@ export class MediaPipeHandController { // Consider renaming this to MediaPipePos
             if (file) {
                 this.uploadedVideoElement.src = URL.createObjectURL(file);
                 this.playVideoButton.disabled = false;
+                this.pauseVideoButton.disabled = true; 
                 this.videoWrapper.classList.add('has-files');
                 this.viewer.updateStatus(`Video '${file.name}' loaded. Click Play Video.`, 'success');
             } else {
                 this.playVideoButton.disabled = true;
+                this.pauseVideoButton.disabled = true;
                 this.videoWrapper.classList.remove('has-files');
                 this.viewer.updateStatus('No video file selected.', 'error');
             }
@@ -95,10 +148,27 @@ export class MediaPipeHandController { // Consider renaming this to MediaPipePos
                 this.webcamElement.style.display = 'none';
                 this.uploadedVideoElement.style.display = 'block';
                 this.uploadedVideoElement.play();
+                this.pauseVideoButton.disabled = false;
+                this.playVideoButton.disabled = true;
                 this.viewer.updateStatus('Playing uploaded video...', 'loading');
                 this.detectPosesInRealTime(); // Start detection for video
             }
         });
+
+        this.pauseVideoButton.addEventListener('click', () => {
+            if (this.currentVideoSource === 'uploaded' && !this.uploadedVideoElement.paused) {
+                this.uploadedVideoElement.pause();
+                // When paused, stop the animation frame to halt pose detection
+                if (this.animationFrameId) {
+                    cancelAnimationFrame(this.animationFrameId);
+                    this.animationFrameId = null;
+                }
+                this.playVideoButton.disabled = false; // Enable play when paused
+                this.pauseVideoButton.disabled = true; // Disable pause when paused
+                this.viewer.updateStatus('Video paused. Click Play to resume.', 'loading');
+            }
+        });
+
 
         this.uploadedVideoElement.addEventListener('play', () => {
             this.viewer.updateStatus('Video playing, mimicking motion.', 'success');
@@ -150,6 +220,8 @@ export class MediaPipeHandController { // Consider renaming this to MediaPipePos
         }
         this.resetRobotToInitialPose(); // Reset robot pose when switching/stopping
         this.drawLandmarks([]); // Clear overlay
+        this.playVideoButton.disabled = true;
+        this.pauseVideoButton.disabled = true;
     }
 
 
@@ -190,134 +262,246 @@ export class MediaPipeHandController { // Consider renaming this to MediaPipePos
         }
     }
 
-    async detectPosesInRealTime() {
-        if (this.video.paused || this.video.ended) {
-            // Stop processing if video is paused or ended
-            this.animationFrameId = null;
+async detectPosesInRealTime() {
+    if (this.video.paused || this.video.ended) {
+        // Stop processing if video is paused or ended
+        this.animationFrameId = null;
+        return;
+    }
+
+    if (this.videoInitialized && this.video.currentTime !== this.lastVideoTime) {
+        this.lastVideoTime = this.video.currentTime;
+
+        // Check if the video element has valid dimensions before proceeding
+        if (this.video.videoWidth === 0 || this.video.videoHeight === 0) {
+            this.animationFrameId = requestAnimationFrame(this.detectPosesInRealTime.bind(this));
             return;
         }
 
-        // Only detect if video (webcam or uploaded) is ready and has new frame
-        if (this.videoInitialized && this.video.currentTime !== this.lastVideoTime) { // Check this.videoInitialized
-            this.lastVideoTime = this.video.currentTime;
-            
-            // Check if the video element has valid dimensions before proceeding
-            if (this.video.videoWidth === 0 || this.video.videoHeight === 0) {
-                if (this.debugMode) console.log("Video element has zero dimensions, skipping detection.");
-                this.animationFrameId = requestAnimationFrame(this.detectPosesInRealTime.bind(this));
-                return;
-            }
+        const startTimeMs = performance.now();
+        try {
+            const result = await this.poseLandmarker.detectForVideo(this.video, startTimeMs);
+            if (result.landmarks && result.landmarks.length > 0) {
+                const poseLandmarks = result.landmarks[0];
+                // --- Calculate robot segment heights ---
+                let currentHipToToeHeight = 0;
+                const leftHip = poseLandmarks[this.POSE.LEFT_HIP];
+                const leftFoot = poseLandmarks[this.POSE.LEFT_FOOT_INDEX];
+                const rightHip = poseLandmarks[this.POSE.RIGHT_HIP];
+                const rightFoot = poseLandmarks[this.POSE.RIGHT_FOOT_INDEX];
 
-            const startTimeMs = performance.now();
-
-            try {
-                const result = await this.poseLandmarker.detectForVideo(this.video, startTimeMs);
-
-                if (result.landmarks && result.landmarks.length > 0) {
-                    const poseLandmarks = result.landmarks[0];
-                    
-                    // NEW: Check if the full human body is visible
-                    if (this.isFullBodyVisible(poseLandmarks)) {
-                        this.mapLandmarksToRobot(poseLandmarks);
-                        this.drawLandmarks(poseLandmarks); // Draw detected pose
-                    } else {
-                        // If partial body or not visible enough, reset robot to initial pose
-                        if (this.debugMode) console.log('Partial body detected or not visible enough. Resetting to initial pose.');
-                        this.resetRobotToInitialPose();
-                        this.drawLandmarks(poseLandmarks); // Still draw detected landmarks for feedback
-                    }
-                } else {
-                    // No landmarks detected at all
-                    if (this.debugMode) console.log('No pose landmarks detected. Resetting to initial pose.');
-                    this.resetRobotToInitialPose();
-                    this.drawLandmarks([]); // Clear overlay if no pose
+                if (leftHip && leftFoot) {
+                    currentHipToToeHeight = Math.max(currentHipToToeHeight, Math.abs(leftFoot.y - leftHip.y));
                 }
-            } catch (error) {
-                console.error("Pose detection error:", error);
-                // In case of error, revert to initial pose as a safe fallback
+                if (rightHip && rightFoot) {
+                    currentHipToToeHeight = Math.max(currentHipToToeHeight, Math.abs(rightFoot.y - rightHip.y));
+                }
+
+                let headToToeHeight = 0;
+                const nose = poseLandmarks[this.POSE.NOSE];
+                if (nose) {
+                    if (leftFoot) {
+                        headToToeHeight = Math.max(headToToeHeight, Math.abs(leftFoot.y - nose.y));
+                    }
+                    if (rightFoot) {
+                        headToToeHeight = Math.max(headToToeHeight, Math.abs(rightFoot.y - nose.y));
+                    }
+                }
+
+                let headToHipHeight = 0;
+                const leftShoulder = poseLandmarks[this.POSE.LEFT_SHOULDER];
+                const rightShoulder = poseLandmarks[this.POSE.RIGHT_SHOULDER];
+                if (nose && leftHip && leftShoulder) {
+                    const avgShoulderY = (leftShoulder.y + rightShoulder.y) / 2;
+                    const lowerHipY = Math.max(leftHip.y, rightHip.y);
+                    headToHipHeight = Math.abs(lowerHipY - avgShoulderY);
+                } else if (nose && rightHip && rightShoulder) {
+                    const avgShoulderY = (leftShoulder.y + rightShoulder.y) / 2;
+                    const lowerHipY = Math.max(leftHip.y, rightHip.y);
+                    headToHipHeight = Math.abs(lowerHipY - avgShoulderY);
+                }
+
+                let headHeight = 0;
+                const leftEye = poseLandmarks[this.POSE.LEFT_EYE];
+                const rightEye = poseLandmarks[this.POSE.RIGHT_EYE];
+                const mouthLeft = poseLandmarks[this.POSE.MOUTH_LEFT];
+                const mouthRight = poseLandmarks[this.POSE.MOUTH_RIGHT];
+                if (nose && leftEye && rightEye && mouthLeft && mouthRight) {
+                    const avgEyeY = (leftEye.y + rightEye.y) / 2;
+                    const avgMouthY = (mouthLeft.y + mouthRight.y) / 2;
+                    headHeight = Math.abs(avgMouthY - avgEyeY);
+                } else if (nose && mouthLeft && mouthRight) {
+                    const avgMouthY = (mouthLeft.y + mouthRight.y) / 2;
+                    headHeight = Math.abs(avgMouthY - nose.y);
+                }
+
+                // --- Visibility logic ---
+                if (this.isFullBodyVisible(poseLandmarks, currentHipToToeHeight, headToToeHeight, 0.429, 0.844)) {
+                    if (this.debugMode) console.log('Full body IS visible (heights sufficient). Mapping to robot.');
+                    this.mapLandmarksToRobot(poseLandmarks);
+                    this.drawLandmarks(poseLandmarks);
+                } else if (this.isUpperBodyVisible(poseLandmarks, headToHipHeight, 0.502)) {
+                    if (this.debugMode) console.log('Upper body IS visible (height sufficient). Mapping upper body to robot.');
+                    this.mapLandmarksToRobot(poseLandmarks);
+                    this.drawLandmarks(poseLandmarks);
+                } else if (this.isHeadVisible(poseLandmarks, headHeight, 0.191)) {
+                    if (this.debugMode) console.log('Head IS visible (height sufficient). Mapping head to robot.');
+                    this.mapHeadLandmarksToRobot(poseLandmarks);
+                    this.drawLandmarks(poseLandmarks);
+                } else {
+                    if (this.debugMode) console.log('Full body or upper body IS NOT visible (heights insufficient). Resetting robot.');
+                    this.resetRobotToInitialPose();
+                    this.drawLandmarks(poseLandmarks);
+                }
+            } else {
+                // No landmarks detected at all
+                if (this.debugMode) console.log('No pose landmarks detected. Resetting to initial pose.');
                 this.resetRobotToInitialPose();
                 this.drawLandmarks([]);
             }
-        } else if (!this.videoInitialized && this.video.readyState >= 2) { // Check if video is ready to play
-            this.overlayCanvas = document.getElementById("overlay");
-            this.overlayCanvas.width = this.video.videoWidth;
-            this.overlayCanvas.height = this.video.videoHeight;
-            this.overlayCtx = this.overlayCanvas.getContext("2d");
-            this.videoInitialized = true; // Mark as initialized
-            if (this.debugMode) console.log("Video element dimensions updated for overlay.");
-        } else {
-            // No new video frame or video not ready, but we still want to keep the loop going
-            if (this.debugMode) console.log("No new video frame or video not ready.");
-            if (this.video.paused) {
-                 this.drawLandmarks([]); // Clear overlay if paused
-            }
+        } catch (error) {
+            console.error("Pose detection error:", error);
+            // In case of error, revert to initial pose as a safe fallback
+            this.resetRobotToInitialPose();
+            this.drawLandmarks([]);
         }
-        this.animationFrameId = requestAnimationFrame(this.detectPosesInRealTime.bind(this));
+    } else if (!this.videoInitialized && this.video.readyState >= 2) {
+        this.overlayCanvas = document.getElementById("overlay");
+        this.overlayCanvas.width = this.video.videoWidth;
+        this.overlayCanvas.height = this.video.videoHeight;
+        this.overlayCtx = this.overlayCanvas.getContext("2d");
+        this.videoInitialized = true;
+        if (this.debugMode) console.log("Video element dimensions updated for overlay.");
+    } else {
+        if (this.debugMode) console.log("No new video frame or video not ready.");
+        if (this.video.paused) {
+            this.drawLandmarks([]);
+        }
+    }
+    this.animationFrameId = requestAnimationFrame(this.detectPosesInRealTime.bind(this));
+}
+
+
+
+// Add this new function to your class, similar to isUpperBodyVisible
+isHeadVisible(landmarks, headHeight, minHeadThreshold = 0.191) { // Renamed parameters for clarity
+    let isHeadHeightSufficient = true; // This flag represents if the head height is sufficient
+
+    // Check if headHeight is NOT greater than the fixed threshold, then it's not sufficient
+    if (headHeight > minHeadThreshold) {
+        isHeadHeightSufficient = false;
+       // if (this.debugMode) console.log(`Head Height (${headHeight.toFixed(3)}) not sufficient (required: > ${minHeadThreshold.toFixed(3)}).`);
+    } else {
+       // if (this.debugMode) console.log(`Head Height (${headHeight.toFixed(3)}) is sufficient (required: > ${minHeadThreshold.toFixed(3)}).`);
     }
 
+    // Ensure core head landmarks are present for robustness
+    const nose = landmarks[this.POSE.NOSE];
+    const leftEye = landmarks[this.POSE.LEFT_EYE];
+    const rightEye = landmarks[this.POSE.RIGHT_EYE];
+    const leftEar = landmarks[this.POSE.LEFT_EAR];
+    const rightEar = landmarks[this.POSE.RIGHT_EAR];
+    const mouthLeft = landmarks[this.POSE.MOUTH_LEFT];
+    const mouthRight = landmarks[this.POSE.MOUTH_RIGHT];
+
+    const essentialHeadLandmarksPresent =
+        nose &&
+        leftEye && rightEye &&
+        leftEar && rightEar &&
+        mouthLeft && mouthRight;
+
+    if (this.debugMode) {
+        console.log(`Essential head landmarks present: ${essentialHeadLandmarksPresent}`);
+    }
+
+    // Return true only if both the height condition and essential landmark presence are met
+    return isHeadHeightSufficient && essentialHeadLandmarksPresent;
+}
+
+isUpperBodyVisible(landmarks, headToHipHeight, minHeadToHipThreshold = 0.502) { // Renamed parameters for clarity
+    let isUpperBodyHeightSufficient = true; // This flag represents if the head-to-hip height is sufficient
+
+    // Check if headToHipHeight is NOT greater than the fixed threshold, then it's not sufficient
+    if (headToHipHeight > minHeadToHipThreshold) {
+        isUpperBodyHeightSufficient = false;
+     //   if (this.debugMode) console.log(`Upper Body Height (${headToHipHeight.toFixed(3)}) not sufficient (required: > ${minHeadToHipThreshold.toFixed(3)}).`);
+    } else {
+       // if (this.debugMode) console.log(`Upper Body Height (${headToHipHeight.toFixed(3)}) is sufficient (required: > ${minHeadToHipThreshold.toFixed(3)}).`);
+    }
+
+    // Additionally, you might want to ensure at least some core upper body landmarks are detected,
+    // even if the height check is the primary determinant. This prevents false positives
+    // if the height calculation is erratic but no actual pose is present.
+    // However, if the height calculation itself is robust enough to imply landmark presence,
+    // you can rely solely on the height. For a robust solution, checking a few key points is good.
+    const nose = landmarks[this.POSE.NOSE];
+    const leftShoulder = landmarks[this.POSE.LEFT_SHOULDER];
+    const rightShoulder = landmarks[this.POSE.RIGHT_SHOULDER];
+    const leftElbow = landmarks[this.POSE.LEFT_ELBOW];
+    const rightElbow = landmarks[this.POSE.RIGHT_ELBOW];
+    const leftWrist = landmarks[this.POSE.LEFT_WRIST];
+    const rightWrist = landmarks[this.POSE.RIGHT_WRIST];
+    const leftHip = landmarks[this.POSE.LEFT_HIP];
+    const rightHip = landmarks[this.POSE.RIGHT_HIP];
+
+
+    // You can adjust which "key" upper body landmarks are essential for detection.
+    // For a minimal check: nose, shoulders, and hips.
+    // For a more comprehensive check: include elbows and wrists.
+    const essentialUpperBodyLandmarksPresent =
+        nose &&
+        leftShoulder && rightShoulder &&
+        leftHip && rightHip &&
+        leftElbow && rightElbow &&
+        leftWrist && rightWrist; // Added elbows and wrists for a more robust upper body check
+
+    if (this.debugMode) {
+        console.log(`Essential upper body landmarks present: ${essentialUpperBodyLandmarksPresent}`);
+    }
+
+
+    // Return true only if both the height condition and essential landmark presence are met
+    return isUpperBodyHeightSufficient && essentialUpperBodyLandmarksPresent;
+}
+
     /**
-     * Checks if a set of critical body landmarks are sufficiently visible.
-     * @param {Array} landmarks - The array of pose landmarks from MediaPipe.
-     * @param {number} visibilityThreshold - The minimum visibility score for a landmark to be considered visible (0.0 to 1.0).
-     * @returns {boolean} True if all key landmarks are visible, false otherwise.
+     * Checks if the overall body height (head to toe) is sufficient AND the hip-to-toe height is sufficient.
+     * This version replaces the individual key landmark presence check with a head-to-toe height check.
+     * It does NOT consider the 'visibility' property from MediaPipe.
+     * @param {Array} landmarks - The array of pose landmarks from MediaPipe (not directly used for individual presence check here).
+     * @param {number} actualHipToToeHeight - The calculated hip-to-toe height of the detected pose (normalized).
+     * @param {number} headToToeHeight - The calculated head-to-toe height of the detected pose (normalized).
+     * @param {number} minHipToToeThreshold - The minimum normalized hip-to-toe height required.
+     * @param {number} minHeadToToeThreshold - The minimum normalized head-to-toe height required for "all key landmarks present" condition.
+     * @returns {boolean} True if both height conditions are met, false otherwise.
      */
-    isFullBodyVisible(landmarks, visibilityThreshold = 0.6) {
-        const POSE = {
-            NOSE: 0,
-            LEFT_EAR: 7,
-            RIGHT_EAR: 8,
-            LEFT_SHOULDER: 11,
-            RIGHT_SHOULDER: 12,
-            LEFT_WRIST: 15,
-            RIGHT_WRIST: 16,
-            LEFT_HIP: 23,
-            RIGHT_HIP: 24,
-            LEFT_KNEE: 25,
-            RIGHT_KNEE: 26,
-            LEFT_ANKLE: 27,
-            RIGHT_ANKLE: 28,
-            LEFT_FOOT_INDEX: 31, // End of the foot
-            RIGHT_FOOT_INDEX: 32 // End of the foot
-        };
+    isFullBodyVisible(landmarks, actualHipToToeHeight, headToToeHeight, minHipToToeThreshold = 0.429, minHeadToToeThreshold = 0.844) {
+        let allKeyLandmarksConsideredPresent = true; // This flag now represents if the head-to-toe height is sufficient
 
-        const keyLandmarkIndices = [
-            POSE.NOSE,
-            POSE.LEFT_EAR,
-            POSE.RIGHT_EAR,
-            POSE.LEFT_SHOULDER,
-            POSE.RIGHT_SHOULDER,
-            POSE.LEFT_WRIST,
-            POSE.RIGHT_WRIST,
-            POSE.LEFT_HIP,
-            POSE.RIGHT_HIP,
-            POSE.LEFT_KNEE,
-            POSE.RIGHT_KNEE,
-            POSE.LEFT_ANKLE,
-            POSE.RIGHT_ANKLE,
-            POSE.LEFT_FOOT_INDEX,
-            POSE.RIGHT_FOOT_INDEX
-        ];
-
-        let allVisible = true;
-        if (this.debugMode) console.groupCollapsed('Full Body Visibility Check');
-
-        for (const index of keyLandmarkIndices) {
-            const landmark = landmarks[index];
-            // Check if landmark exists and its visibility is above the threshold
-            if (!landmark || landmark.visibility < visibilityThreshold) {
-                if (this.debugMode) {
-                    const landmarkName = Object.keys(POSE).find(key => POSE[key] === index) || `Landmark ${index}`;
-                    console.log(`   ${landmarkName} (idx:${index}) visibility: ${landmark ? landmark.visibility.toFixed(2) : 'N/A'} < ${visibilityThreshold.toFixed(2)}`);
-                }
-                allVisible = false;
-                break; // No need to check further if one is not visible
-            }
+        // Replaced the loop checking for individual landmark presence with this head-to-toe height check.
+        // If headToToeHeight is NOT greater than the fixed difference, then allKeyLandmarksConsideredPresent becomes false.
+        if (headToToeHeight > minHeadToToeThreshold) { 
+            allKeyLandmarksConsideredPresent = false;
+          //  if (this.debugMode) console.log(`Head-to-Toe Height (${headToToeHeight.toFixed(2)}) not sufficient (required: > ${minHeadToToeThreshold.toFixed(2)}).`);
+        } else {
+           // if (this.debugMode) console.log(`Head-to-Toe Height (${headToToeHeight.toFixed(2)}) is sufficient (required: > ${minHeadToToeThreshold.toFixed(2)}).`);
         }
+
+        // The keyLandmarkIndices array from the original code is still defined for context, 
+        // but the loop that iterated through it to set `allVisible` (now `allKeyLandmarksConsideredPresent`)
+        // has been removed as per your instruction to replace it with the height check.
+        // The `POSE` constant here should be `this.POSE` if it's a class member, for consistency.
+        // Removed `const POSE = { ... }` local definition and related `keyLandmarkIndices` loop
+        // to fully reflect the replacement of that logic.
+
+        // Second check: Is the hip-to-toe height sufficient?
+        const isHipToToeHeightSufficient = actualHipToToeHeight < minHipToToeThreshold;
         if (this.debugMode) {
-            console.log(`Overall Full Body Visible: ${allVisible}`);
-            console.groupEnd();
+           // console.log(`Hip-to-Toe Height Check: ${actualHipToToeHeight.toFixed(2)} > ${minHipToToeThreshold.toFixed(2)} = ${isHipToToeHeightSufficient}`);
         }
-        return allVisible;
+
+        // Return true only if both height conditions are met
+        return allKeyLandmarksConsideredPresent && isHipToToeHeightSufficient;
     }
 
     /**
@@ -331,153 +515,860 @@ export class MediaPipeHandController { // Consider renaming this to MediaPipePos
             this.previousJointValues[jointName] = this.initialRobotPose[jointName];
         }
     }
+drawLandmarks(landmarks) {
 
-    drawLandmarks(landmarks) {
-        if (!this.overlayCtx || !this.overlayCanvas) {
-            if (this.debugMode) console.warn("Overlay canvas not initialized for drawing.");
-            return;
+        if (!this.overlayCtx || !this.overlayCanvas) {
+
+            if (this.debugMode) console.warn("Overlay canvas not initialized for drawing.");
+
+            return;
+
+        }
+
+        this.overlayCtx.clearRect(0, 0, this.overlayCanvas.width, this.overlayCanvas.height);
+
+
+
+        if (landmarks.length === 0) { // If no landmarks, just clear and return
+
+            return;
+
+        }
+
+
+
+        // Save the current state of the canvas
+
+        this.overlayCtx.save();
+
+       
+
+        // Flip the canvas horizontally to un-mirror the drawing
+
+        this.overlayCtx.translate(this.overlayCanvas.width, 0);
+
+        this.overlayCtx.scale(-1, 1);
+
+
+
+        const scaleX = this.overlayCanvas.width;
+
+        const scaleY = this.overlayCanvas.height;
+
+
+
+        // Define connections for all relevant body parts
+
+        const connections = [
+
+            // Head
+
+            [0, 1], [0, 4], [1, 2], [2, 3], [4, 5], [5, 6], [9, 10], // Face landmarks
+
+            [0, 7], [0, 8], // Nose to ears (simplified for visual)
+
+
+
+            // Torso
+
+            [11, 12], // Shoulders
+
+            [23, 24], // Hips
+
+            [11, 23], [12, 24], // Shoulders to Hips (torso sides)
+
+            [11, 13], [13, 15], // Left Arm
+
+            [12, 14], [14, 16], // Right Arm
+
+
+
+            // Legs
+
+            [23, 25], [25, 27], // Left Leg: Hip to Knee to Ankle
+
+            [24, 26], [26, 28], // Right Leg: Hip to Knee to Ankle
+
+            [27, 29], [29, 31], // Left Foot: Ankle to Heel to Foot Index
+
+            [28, 30], [30, 32]  // Right Foot: Ankle to Heel to Foot Index
+
+        ];
+
+
+
+        this.overlayCtx.strokeStyle = '#33aaff'; // A vibrant blue for lines
+
+        this.overlayCtx.lineWidth = 5; // Increased line width for connections
+
+        for (const connection of connections) {
+
+            const start = landmarks[connection[0]];
+
+            const end = landmarks[connection[1]];
+
+           
+
+            // Only draw connection if both landmarks are valid and sufficiently visible
+
+            if (start && end &&
+
+                (start.visibility === undefined || start.visibility > 0.5) &&
+
+                (end.visibility === undefined || end.visibility > 0.5)) {
+
+                this.overlayCtx.beginPath();
+
+                this.overlayCtx.moveTo(start.x * scaleX, start.y * scaleY);
+
+                this.overlayCtx.lineTo(end.x * scaleX, end.y * scaleY);
+
+                this.overlayCtx.stroke();
+
+            }
+
+        }
+
+
+
+        // Draw individual landmarks (points)
+
+        this.overlayCtx.fillStyle = '#FF4136'; // Red for landmarks
+
+        this.overlayCtx.strokeStyle = '#FFFFFF'; // White border
+
+        this.overlayCtx.lineWidth = 2; // Increased line width for landmark borders
+
+        for (let i = 0; i < landmarks.length; i++) {
+
+            // Only draw if landmark exists and visibility is good
+
+            if (landmarks[i] && (landmarks[i].visibility === undefined || landmarks[i].visibility > 0.5)) {
+
+                const x = landmarks[i].x * scaleX;
+
+                const y = landmarks[i].y * scaleY;
+
+               
+
+                this.overlayCtx.beginPath();
+
+                this.overlayCtx.arc(x, y, 7, 0, 2 * Math.PI); // Increased radius for landmarks
+
+                this.overlayCtx.fill();
+
+                this.overlayCtx.stroke(); // Draw border
+
+            }
+
+        }
+
+
+
+        // Restore the canvas state
+
+        this.overlayCtx.restore();
+
+}
+mapHeadLandmarksToRobot(poseLandmarks){
+     const POSE = {
+        NOSE: 0,
+        LEFT_EYE_INNER: 1,
+        LEFT_EYE: 2,
+        LEFT_EYE_OUTER: 3,
+        RIGHT_EYE_INNER: 4,
+        RIGHT_EYE: 5,
+        RIGHT_EYE_OUTER: 6,
+        LEFT_EAR: 7,
+        RIGHT_EAR: 8,
+        LEFT_SHOULDER: 11,
+        LEFT_ELBOW: 13,
+        LEFT_WRIST: 15,
+        RIGHT_SHOULDER: 12,
+        RIGHT_ELBOW: 14,
+        RIGHT_WRIST: 16,
+        LEFT_HIP: 23,
+        RIGHT_HIP: 24,
+        LEFT_KNEE: 25,
+        RIGHT_KNEE: 26,
+        LEFT_ANKLE: 27,
+        RIGHT_ANKLE: 28,
+        LEFT_FOOT_INDEX: 31,
+        RIGHT_FOOT_INDEX: 32
+
+    };
+
+    // Helper functions for 2D/3D operations
+    const create2DVector = (p1, p2) => ({
+        x: p2.x - p1.x,
+        y: p2.y - p1.y
+    });
+
+    // New helper for 3D vector - KEPT because it's part of your provided helpers
+    const create3DVector = (p1, p2) => ({
+        x: p2.x - p1.x,
+        y: p2.y - p1.y,
+        z: p2.z - p1.z
+    });
+
+    const angle2D = (vec) => Math.atan2(vec.y, vec.x);
+
+    const angleBetweenVectors = (vec1, vec2) => {
+        const dotProduct = vec1.x * vec2.x + vec1.y * vec2.y;
+        const magnitude1 = vectorMagnitude(vec1);
+        const magnitude2 = vectorMagnitude(vec2);
+        if (magnitude1 === 0 || magnitude2 === 0) return 0;
+        const clampedDotProduct = Math.max(-1, Math.min(1, dotProduct / (magnitude1 * magnitude2)));
+        return Math.acos(clampedDotProduct);
+    };
+
+    const vectorMagnitude = (vec) => Math.hypot(vec.x, vec.y);
+    const vectorMagnitude3D = (vec) => Math.hypot(vec.x, vec.y, vec.z); // New: 3D magnitude - KEPT
+
+    // Smoothing
+    if (!this.previousJointValues) this.previousJointValues = {};
+    const smooth = (jointName, value, alpha = 0.4) => {
+        if (isNaN(value)) {
+            if (this.debugMode) console.warn(`Smoothing: Input value for ${jointName} is NaN. Using previous or default.`);
+            return this.previousJointValues[jointName] || (this.initialRobotPose[jointName] || 0);
         }
-        this.overlayCtx.clearRect(0, 0, this.overlayCanvas.width, this.overlayCanvas.height);
+        const prev = this.previousJointValues[jointName] ?? value;
+        const smoothed = prev * (1 - alpha) + value * alpha;
+        this.previousJointValues[jointName] = smoothed;
+        return smoothed;
+    };
 
-        if (landmarks.length === 0) { // If no landmarks, just clear and return
-            return;
+    // Landmark validation
+    const isValid = (landmark) => landmark &&
+        (landmark.visibility === undefined || landmark.visibility > 0.5);
+
+
+    // --- Head Logic ---
+// We now also need LEFT_SHOULDER and RIGHT_SHOULDER for distance calculation
+if (isValid(poseLandmarks[POSE.NOSE]) &&
+    isValid(poseLandmarks[POSE.LEFT_EYE_OUTER]) &&
+    isValid(poseLandmarks[POSE.RIGHT_EYE_OUTER]) &&
+    isValid(poseLandmarks[POSE.LEFT_EAR]) &&
+    isValid(poseLandmarks[POSE.RIGHT_EAR]) &&
+    isValid(poseLandmarks[POSE.LEFT_SHOULDER]) && // <-- New validation for shoulders
+    isValid(poseLandmarks[POSE.RIGHT_SHOULDER])) { // <-- New validation for shoulders
+
+    const nose = poseLandmarks[POSE.NOSE];
+    const leftEye = poseLandmarks[POSE.LEFT_EYE_OUTER]; // Still used for yaw/pitch calculation
+    const rightEye = poseLandmarks[POSE.RIGHT_EYE_OUTER]; // Still used for yaw/pitch calculation
+
+    const leftShoulder = poseLandmarks[POSE.LEFT_SHOULDER];   // <-- New: Get shoulder landmarks
+    const rightShoulder = poseLandmarks[POSE.RIGHT_SHOULDER]; // <-- New: Get shoulder landmarks
+
+    if (this.debugMode) {
+        console.groupCollapsed('Head Debug (Raw Landmarks)');
+        console.log(`Nose (0): x:${nose.x.toFixed(4)}, y:${nose.y.toFixed(4)}, z:${nose.z ? nose.z.toFixed(4) : 'N/A'}, vis:${nose.visibility ? nose.visibility.toFixed(4) : 'N/A'}`);
+        console.log(`L_Eye_Outer (3): x:${leftEye.x.toFixed(4)}, y:${leftEye.y.toFixed(4)}, z:${leftEye.z ? leftEye.z.toFixed(4) : 'N/A'}, vis:${leftEye.visibility ? leftEye.visibility.toFixed(4) : 'N/A'}`);
+        console.log(`R_Eye_Outer (6): x:${rightEye.x.toFixed(4)}, y:${rightEye.y.toFixed(4)}, z:${rightEye.z ? rightEye.z.toFixed(4) : 'N/A'}, vis:${rightEye.visibility ? rightEye.visibility.toFixed(4) : 'N/A'}`);
+        // <-- ADDED DEBUGGING FOR SHOULDERS -->
+        console.log(`L_Shoulder (11): x:${leftShoulder.x.toFixed(4)}, y:${leftShoulder.y.toFixed(4)}, z:${leftShoulder.z ? leftShoulder.z.toFixed(4) : 'N/A'}, vis:${leftShoulder.visibility ? leftShoulder.visibility.toFixed(4) : 'N/A'}`);
+        console.log(`R_Shoulder (12): x:${rightShoulder.x.toFixed(4)}, y:${rightShoulder.y.toFixed(4)}, z:${rightShoulder.z ? rightShoulder.z.toFixed(4) : 'N/A'}, vis:${rightShoulder.visibility ? rightShoulder.visibility.toFixed(4) : 'N/A'}`);
+        console.groupEnd();
+    }
+
+    // --- UPDATED: Calculate proxy for 'distance from camera' using shoulders ---
+    const shoulderDistancePixels = Math.abs(rightShoulder.x - leftShoulder.x); // <-- Change to shoulder distance
+
+    // --- IMPORTANT: CALIBRATE THIS NEW VALUE ---
+    // You will need to determine this value empirically by observing
+    // 'shoulderDistance' in the console when the user is at an ideal distance.
+    const REFERENCE_SHOULDER_DISTANCE = 0.25; // <--- !!! ADJUST THIS VALUE BASED ON YOUR CALIBRATION !!!
+                                            // This will likely be different from your eye-distance reference.
+
+    let distanceFactor = REFERENCE_SHOULDER_DISTANCE / shoulderDistancePixels; // <-- Use shoulder distance
+    distanceFactor = Math.max(0.5, Math.min(2.5, distanceFactor)); // Keep clamping
+
+    // --- Calculate head_z (Yaw - left/right rotation) ---
+    const eyeMidpointX = (leftEye.x + rightEye.x) / 2;
+    const yawMovement = nose.x - eyeMidpointX;
+    const baseYawSensitivity = 45;
+    let head_z_val = yawMovement * (baseYawSensitivity * distanceFactor);
+
+    // Clamp to URDF limits
+    head_z_val = Math.max(-1.57079632679, Math.min(1.57079632679, head_z_val));
+    head_z_val = smooth('head_z', head_z_val);
+    this.viewer?.updateJoint('head_z', head_z_val);
+
+    // --- Calculate head_y (Pitch - up/down rotation) ---
+    const eyeMidpointY = (leftEye.y + rightEye.y) / 2;
+    const pitchMovement = nose.y - eyeMidpointY;
+    const basePitchSensitivity = 15;
+    let head_y_val = -pitchMovement * (basePitchSensitivity * distanceFactor);
+
+    // Clamp to URDF limits
+    head_y_val = Math.max(-0.785398163397, Math.min(0.10471975512, head_y_val));
+    head_y_val = smooth('head_y', head_y_val);
+    this.viewer?.updateJoint('head_y', head_y_val);
+
+
+    if (this.debugMode) {
+        console.log('2D Mapping Head Results (Smoothed):', {
+            head_z: head_z_val.toFixed(3),
+            head_y: head_y_val.toFixed(3),
+            shoulderDistance: shoulderDistancePixels.toFixed(4), // <-- CHANGED TO SHOULDER DISTANCE
+            distanceFactor: distanceFactor.toFixed(2)
+        });
+    }
+
+} else {
+    if (this.debugMode) console.warn("Invalid head or shoulder landmarks, defaulting head joints to initial pose."); // <-- Updated warning
+    this.viewer?.updateJoint('head_z', this.initialRobotPose.head_z);
+    this.viewer?.updateJoint('head_y', this.initialRobotPose.head_y);
+}
+
+}
+
+
+mapLandmarksToRobot(poseLandmarks) {
+    const POSE = {
+        NOSE: 0,
+        LEFT_EYE_INNER: 1,
+        LEFT_EYE: 2,
+        LEFT_EYE_OUTER: 3,
+        RIGHT_EYE_INNER: 4,
+        RIGHT_EYE: 5,
+        RIGHT_EYE_OUTER: 6,
+        LEFT_EAR: 7,
+        RIGHT_EAR: 8,
+        LEFT_SHOULDER: 11,
+        LEFT_ELBOW: 13,
+        LEFT_WRIST: 15,
+        RIGHT_SHOULDER: 12,
+        RIGHT_ELBOW: 14,
+        RIGHT_WRIST: 16,
+        LEFT_HIP: 23,
+        RIGHT_HIP: 24,
+        LEFT_KNEE: 25,
+        RIGHT_KNEE: 26,
+        LEFT_ANKLE: 27,
+        RIGHT_ANKLE: 28,
+        LEFT_FOOT_INDEX: 31,
+        RIGHT_FOOT_INDEX: 32
+
+    };
+
+    // Helper functions for 2D/3D operations
+    const create2DVector = (p1, p2) => ({
+        x: p2.x - p1.x,
+        y: p2.y - p1.y
+    });
+
+    // New helper for 3D vector - KEPT because it's part of your provided helpers
+    const create3DVector = (p1, p2) => ({
+        x: p2.x - p1.x,
+        y: p2.y - p1.y,
+        z: p2.z - p1.z
+    });
+
+    const angle2D = (vec) => Math.atan2(vec.y, vec.x);
+
+    const angleBetweenVectors = (vec1, vec2) => {
+        const dotProduct = vec1.x * vec2.x + vec1.y * vec2.y;
+        const magnitude1 = vectorMagnitude(vec1);
+        const magnitude2 = vectorMagnitude(vec2);
+        if (magnitude1 === 0 || magnitude2 === 0) return 0;
+        const clampedDotProduct = Math.max(-1, Math.min(1, dotProduct / (magnitude1 * magnitude2)));
+        return Math.acos(clampedDotProduct);
+    };
+
+    const vectorMagnitude = (vec) => Math.hypot(vec.x, vec.y);
+    const vectorMagnitude3D = (vec) => Math.hypot(vec.x, vec.y, vec.z); // New: 3D magnitude - KEPT
+
+    // Smoothing
+    if (!this.previousJointValues) this.previousJointValues = {};
+    const smooth = (jointName, value, alpha = 0.2) => {
+        if (isNaN(value)) {
+            if (this.debugMode) console.warn(`Smoothing: Input value for ${jointName} is NaN. Using previous or default.`);
+            return this.previousJointValues[jointName] || (this.initialRobotPose[jointName] || 0);
+        }
+        const prev = this.previousJointValues[jointName] ?? value;
+        const smoothed = prev * (1 - alpha) + value * alpha;
+        this.previousJointValues[jointName] = smoothed;
+        return smoothed;
+    };
+
+    // Landmark validation
+    const isValid = (landmark) => landmark &&
+        (landmark.visibility === undefined || landmark.visibility > 0.5);
+
+    // --- ABS (Torso) Logic ---
+    const MID_SHOULDER_X = (poseLandmarks[POSE.LEFT_SHOULDER]?.x + poseLandmarks[POSE.RIGHT_SHOULDER]?.x) / 2;
+    const MID_SHOULDER_Y = (poseLandmarks[POSE.LEFT_SHOULDER]?.y + poseLandmarks[POSE.RIGHT_SHOULDER]?.y) / 2;
+    const MID_HIP_X = (poseLandmarks[POSE.LEFT_HIP]?.x + poseLandmarks[POSE.RIGHT_HIP]?.x) / 2;
+    const MID_HIP_Y = (poseLandmarks[POSE.LEFT_HIP]?.y + poseLandmarks[POSE.RIGHT_HIP]?.y) / 2;
+
+    // --- Calculate Mid-Shoulder Z and Mid-Hip Z ---
+    const MID_SHOULDER_Z = (poseLandmarks[POSE.LEFT_SHOULDER]?.z + poseLandmarks[POSE.RIGHT_SHOULDER]?.z) / 2;
+    const MID_HIP_Z = (poseLandmarks[POSE.LEFT_HIP]?.z + poseLandmarks[POSE.RIGHT_HIP]?.z) / 2;
+
+    // Removed the 'torsoCenterX', 'torsoCenterY', 'torsoCenterZ' calculation and smoothing.
+    // This also removes the associated console logs for torso center.
+
+    let areTorsoLandmarksValid = isValid(poseLandmarks[POSE.LEFT_SHOULDER]) &&
+                                 isValid(poseLandmarks[POSE.RIGHT_SHOULDER]) &&
+                                 isValid(poseLandmarks[POSE.LEFT_HIP]) &&
+                                 isValid(poseLandmarks[POSE.RIGHT_HIP]);
+
+    if (this.debugMode && !areTorsoLandmarksValid) {
+        console.warn("Not all torso landmarks visible for ABS calculations.");
+    }
+
+    // --- ABS (Torso) Logic ---
+    if (areTorsoLandmarksValid) {
+        if (this.debugMode) {
+            console.groupCollapsed('ABS Debug (Raw Landmarks)');
+            console.log(`L_Shoulder (11): x:${poseLandmarks[POSE.LEFT_SHOULDER].x.toFixed(4)}, y:${poseLandmarks[POSE.LEFT_SHOULDER].y.toFixed(4)}, z:${poseLandmarks[POSE.LEFT_SHOULDER].z.toFixed(4)}`);
+            console.log(`R_Shoulder (12): x:${poseLandmarks[POSE.RIGHT_SHOULDER].x.toFixed(4)}, y:${poseLandmarks[POSE.RIGHT_SHOULDER].y.toFixed(4)}, z:${poseLandmarks[POSE.RIGHT_SHOULDER].z.toFixed(4)}`);
+            console.log(`L_Hip (23): x:${poseLandmarks[POSE.LEFT_HIP].x.toFixed(4)}, y:${poseLandmarks[POSE.LEFT_HIP].y.toFixed(4)}, z:${poseLandmarks[POSE.LEFT_HIP].z.toFixed(4)}`);
+            console.log(`R_Hip (24): x:${poseLandmarks[POSE.RIGHT_HIP].x.toFixed(4)}, y:${poseLandmarks[POSE.RIGHT_HIP].y.toFixed(4)}, z:${poseLandmarks[POSE.RIGHT_HIP].z.toFixed(4)}`);
+            console.groupEnd();
         }
 
-        // Save the current state of the canvas
-        this.overlayCtx.save();
-        
-        // Flip the canvas horizontally to un-mirror the drawing
-        this.overlayCtx.translate(this.overlayCanvas.width, 0);
-        this.overlayCtx.scale(-1, 1);
+        // --- abs_x: Side Bend (Lean Left/Right) ---
+        const shoulderVerticalDifference = poseLandmarks[POSE.LEFT_SHOULDER].y - poseLandmarks[POSE.RIGHT_SHOULDER].y;
+        const shoulderHorizontalDistance = Math.abs(poseLandmarks[POSE.RIGHT_SHOULDER].x - poseLandmarks[POSE.LEFT_SHOULDER].x);
 
-        const scaleX = this.overlayCanvas.width;
-        const scaleY = this.overlayCanvas.height;
+      let absX = 0;
+const sideBendThreshold = 0.01; // E.g., ignore differences smaller than 1% of screen height/width
+if (Math.abs(shoulderVerticalDifference) > sideBendThreshold && shoulderHorizontalDistance > 0.01) {
+    const sideBendSensitivity = 1.0; // Adjusted sensitivity
+    absX = (shoulderVerticalDifference / shoulderHorizontalDistance) * sideBendSensitivity * -1;
+}
 
-        // Define connections for all relevant body parts
-        const connections = [
-            // Head
-            [0, 1], [0, 4], [1, 2], [2, 3], [4, 5], [5, 6], [9, 10], // Face landmarks
-            [0, 7], [0, 8], // Nose to ears (simplified for visual)
+        absX = smooth('abs_x', absX);
+        absX = Math.max(-0.79, Math.min(0.79, absX));
+        this.viewer?.updateJoint('abs_x', absX);
 
-            // Torso
-            [11, 12], // Shoulders
-            [23, 24], // Hips
-            [11, 23], [12, 24], // Shoulders to Hips (torso sides)
-            [11, 13], [13, 15], // Left Arm
-            [12, 14], [14, 16], // Right Arm
+        // --- abs_y: Forward/Backward Lean ---
+        const torsoVec = create2DVector({
+            x: MID_HIP_X,
+            y: MID_HIP_Y
+        }, {
+            x: MID_SHOULDER_X,
+            y: MID_SHOULDER_Y
+        });
+        const torsoAngle = angle2D(torsoVec);
 
-            // Legs
-            [23, 25], [25, 27], // Left Leg: Hip to Knee to Ankle
-            [24, 26], [26, 28], // Right Leg: Hip to Knee to Ankle
-            [27, 29], [29, 31], // Left Foot: Ankle to Heel to Foot Index
-            [28, 30], [30, 32]  // Right Foot: Ankle to Heel to Foot Index
-        ];
+        const mappedAngle = torsoAngle + Math.PI / 2;
 
-        this.overlayCtx.strokeStyle = '#33aaff'; // A vibrant blue for lines
-        this.overlayCtx.lineWidth = 5; // Increased line width for connections
-        for (const connection of connections) {
-            const start = landmarks[connection[0]];
-            const end = landmarks[connection[1]];
-            
-            // Only draw connection if both landmarks are valid and sufficiently visible
-            if (start && end && 
-                (start.visibility === undefined || start.visibility > 0.5) &&
-                (end.visibility === undefined || end.visibility > 0.5)) {
-                this.overlayCtx.beginPath();
-                this.overlayCtx.moveTo(start.x * scaleX, start.y * scaleY);
-                this.overlayCtx.lineTo(end.x * scaleX, end.y * scaleY);
-                this.overlayCtx.stroke();
+        let absY = 0;
+        const robotAbsYMin = -0.87;
+        const robotAbsYMax = 0.21;
+        const robotAbsYStraight = 0;
+
+        const humanStraightMappedAngle = 0.02;
+        const humanLeanRange = 0.6;
+        const humanLeanBackwardAngle = humanStraightMappedAngle - (humanLeanRange / 2);
+        const humanLeanForwardAngle = humanStraightMappedAngle + (humanLeanRange / 2);
+
+        if (mappedAngle < humanLeanBackwardAngle) {
+            absY = robotAbsYMin;
+        } else if (mappedAngle > humanLeanForwardAngle) {
+            absY = robotAbsYMax;
+        } else {
+            if (mappedAngle <= humanStraightMappedAngle) {
+                const rangeInput = humanStraightMappedAngle - humanLeanBackwardAngle;
+                const rangeOutput = robotAbsYStraight - robotAbsYMin;
+                if (rangeInput > 0) {
+                    absY = robotAbsYMin + rangeOutput *
+                        ((mappedAngle - humanLeanBackwardAngle) / rangeInput);
+                } else {
+                    absY = robotAbsYStraight;
+                }
+            } else {
+                const rangeInput = humanLeanForwardAngle - humanStraightMappedAngle;
+                const rangeOutput = robotAbsYMax - robotAbsYStraight;
+                if (rangeInput > 0) {
+                    absY = robotAbsYStraight + rangeOutput *
+                        ((mappedAngle - humanStraightMappedAngle) / rangeInput);
+                } else {
+                    absY = robotAbsYStraight;
+                }
             }
         }
 
-        // Draw individual landmarks (points)
-        this.overlayCtx.fillStyle = '#FF4136'; // Red for landmarks
-        this.overlayCtx.strokeStyle = '#FFFFFF'; // White border
-        this.overlayCtx.lineWidth = 2; // Increased line width for landmark borders
-        for (let i = 0; i < landmarks.length; i++) {
-            // Only draw if landmark exists and visibility is good
-            if (landmarks[i] && (landmarks[i].visibility === undefined || landmarks[i].visibility > 0.5)) { 
-                const x = landmarks[i].x * scaleX;
-                const y = landmarks[i].y * scaleY;
-                
-                this.overlayCtx.beginPath();
-                this.overlayCtx.arc(x, y, 7, 0, 2 * Math.PI); // Increased radius for landmarks
-                this.overlayCtx.fill();
-                this.overlayCtx.stroke(); // Draw border
-            }
-        }
+        absY = smooth('abs_y', absY);
+        absY = Math.max(robotAbsYMin, Math.min(robotAbsYMax, absY));
+        this.viewer?.updateJoint('abs_y', absY);
 
-        // Restore the canvas state
-        this.overlayCtx.restore();
+        // --- abs_z: Torso Twist (Yaw) ---
+        const shoulderZDifference = poseLandmarks[POSE.LEFT_SHOULDER].z - poseLandmarks[POSE.RIGHT_SHOULDER].z;
+
+       
+let absZ = 0;
+ const twistNeutralZDiff = 0.0;
+const twistThreshold = 0.02; // E.g., ignore Z differences smaller than 2% of total depth
+if (Math.abs(shoulderZDifference - twistNeutralZDiff) > twistThreshold) {
+    const twistSensitivity = 1.5; // Adjusted sensitivity
+    absZ = (shoulderZDifference - twistNeutralZDiff) * twistSensitivity;
+}
+
+
+        absZ = smooth('abs_z', absZ);
+        absZ = Math.max(-1.57, Math.min(1.57, absZ));
+        this.viewer?.updateJoint('abs_z', absZ);
+
+        if (this.debugMode) {
+            console.log('3D Mapping ABS Results (with Z for Twist):', {
+                absX: absX.toFixed(3) + ' (Side Bend - Left is +)',
+                absY: absY.toFixed(3) + ' (Fwd/Bwd Lean - Fwd is +)',
+                absZ: absZ.toFixed(3) + ' (Twist - Left is +)',
+                shoulderVerticalDifference: shoulderVerticalDifference.toFixed(3),
+                torsoAngle: (torsoAngle * 180 / Math.PI).toFixed(1) + '° (Raw Y-lean)',
+                mappedTorsoAngle: (mappedAngle * 180 / Math.PI).toFixed(1) + '° (Relative Y-lean)',
+                shoulderZDifference: shoulderZDifference.toFixed(4) + ' (L_Shoulder.z - R_Shoulder.z)',
+            });
+        }
+    } else {
+        if (this.debugMode) console.warn("Invalid torso landmarks, defaulting abs joints to initial pose.");
+        this.viewer?.updateJoint('abs_x', this.initialRobotPose.abs_x);
+        this.viewer?.updateJoint('abs_y', this.initialRobotPose.abs_y);
+        this.viewer?.updateJoint('abs_z', this.initialRobotPose.abs_z);
+    }
+
+  // ... (your existing POSE definitions and helper functions)
+
+// --- Head Logic ---
+// We now also need LEFT_SHOULDER and RIGHT_SHOULDER for distance calculation
+if (isValid(poseLandmarks[POSE.NOSE]) &&
+    isValid(poseLandmarks[POSE.LEFT_EYE_OUTER]) &&
+    isValid(poseLandmarks[POSE.RIGHT_EYE_OUTER]) &&
+    isValid(poseLandmarks[POSE.LEFT_EAR]) &&
+    isValid(poseLandmarks[POSE.RIGHT_EAR]) &&
+    isValid(poseLandmarks[POSE.LEFT_SHOULDER]) && // <-- New validation for shoulders
+    isValid(poseLandmarks[POSE.RIGHT_SHOULDER])) { // <-- New validation for shoulders
+
+    const nose = poseLandmarks[POSE.NOSE];
+    const leftEye = poseLandmarks[POSE.LEFT_EYE_OUTER]; // Still used for yaw/pitch calculation
+    const rightEye = poseLandmarks[POSE.RIGHT_EYE_OUTER]; // Still used for yaw/pitch calculation
+
+    const leftShoulder = poseLandmarks[POSE.LEFT_SHOULDER];   // <-- New: Get shoulder landmarks
+    const rightShoulder = poseLandmarks[POSE.RIGHT_SHOULDER]; // <-- New: Get shoulder landmarks
+
+    if (this.debugMode) {
+        console.groupCollapsed('Head Debug (Raw Landmarks)');
+        console.log(`Nose (0): x:${nose.x.toFixed(4)}, y:${nose.y.toFixed(4)}, z:${nose.z ? nose.z.toFixed(4) : 'N/A'}, vis:${nose.visibility ? nose.visibility.toFixed(4) : 'N/A'}`);
+        console.log(`L_Eye_Outer (3): x:${leftEye.x.toFixed(4)}, y:${leftEye.y.toFixed(4)}, z:${leftEye.z ? leftEye.z.toFixed(4) : 'N/A'}, vis:${leftEye.visibility ? leftEye.visibility.toFixed(4) : 'N/A'}`);
+        console.log(`R_Eye_Outer (6): x:${rightEye.x.toFixed(4)}, y:${rightEye.y.toFixed(4)}, z:${rightEye.z ? rightEye.z.toFixed(4) : 'N/A'}, vis:${rightEye.visibility ? rightEye.visibility.toFixed(4) : 'N/A'}`);
+        // <-- ADDED DEBUGGING FOR SHOULDERS -->
+        console.log(`L_Shoulder (11): x:${leftShoulder.x.toFixed(4)}, y:${leftShoulder.y.toFixed(4)}, z:${leftShoulder.z ? leftShoulder.z.toFixed(4) : 'N/A'}, vis:${leftShoulder.visibility ? leftShoulder.visibility.toFixed(4) : 'N/A'}`);
+        console.log(`R_Shoulder (12): x:${rightShoulder.x.toFixed(4)}, y:${rightShoulder.y.toFixed(4)}, z:${rightShoulder.z ? rightShoulder.z.toFixed(4) : 'N/A'}, vis:${rightShoulder.visibility ? rightShoulder.visibility.toFixed(4) : 'N/A'}`);
+        console.groupEnd();
+    }
+
+    // --- UPDATED: Calculate proxy for 'distance from camera' using shoulders ---
+    const shoulderDistancePixels = Math.abs(rightShoulder.x - leftShoulder.x); // <-- Change to shoulder distance
+
+    // --- IMPORTANT: CALIBRATE THIS NEW VALUE ---
+    // You will need to determine this value empirically by observing
+    // 'shoulderDistance' in the console when the user is at an ideal distance.
+    const REFERENCE_SHOULDER_DISTANCE = 0.25; // <--- !!! ADJUST THIS VALUE BASED ON YOUR CALIBRATION !!!
+                                            // This will likely be different from your eye-distance reference.
+
+    let distanceFactor = REFERENCE_SHOULDER_DISTANCE / shoulderDistancePixels; // <-- Use shoulder distance
+    distanceFactor = Math.max(0.5, Math.min(2.5, distanceFactor)); // Keep clamping
+
+    // --- Calculate head_z (Yaw - left/right rotation) ---
+    const eyeMidpointX = (leftEye.x + rightEye.x) / 2;
+    const yawMovement = nose.x - eyeMidpointX;
+    const baseYawSensitivity = 45;
+    let head_z_val = yawMovement * (baseYawSensitivity * distanceFactor);
+
+    // Clamp to URDF limits
+    head_z_val = Math.max(-1.57079632679, Math.min(1.57079632679, head_z_val));
+    head_z_val = smooth('head_z', head_z_val);
+    this.viewer?.updateJoint('head_z', head_z_val);
+
+    // --- Calculate head_y (Pitch - up/down rotation) ---
+    const eyeMidpointY = (leftEye.y + rightEye.y) / 2;
+    const pitchMovement = nose.y - eyeMidpointY;
+    const basePitchSensitivity = 15;
+    let head_y_val = -pitchMovement * (basePitchSensitivity * distanceFactor);
+
+    // Clamp to URDF limits
+    head_y_val = Math.max(-0.785398163397, Math.min(0.10471975512, head_y_val));
+    head_y_val = smooth('head_y', head_y_val);
+    this.viewer?.updateJoint('head_y', head_y_val);
+
+
+    if (this.debugMode) {
+        console.log('2D Mapping Head Results (Smoothed):', {
+            head_z: head_z_val.toFixed(3),
+            head_y: head_y_val.toFixed(3),
+            shoulderDistance: shoulderDistancePixels.toFixed(4), // <-- CHANGED TO SHOULDER DISTANCE
+            distanceFactor: distanceFactor.toFixed(2)
+        });
+    }
+
+} else {
+    if (this.debugMode) console.warn("Invalid head or shoulder landmarks, defaulting head joints to initial pose."); // <-- Updated warning
+    this.viewer?.updateJoint('head_z', this.initialRobotPose.head_z);
+    this.viewer?.updateJoint('head_y', this.initialRobotPose.head_y);
+}
+    /*
+
+    // --- Example of how the torso center could influence robot position (if applicable) ---
+    // This is highly dependent on your robot's capabilities and how you want to map human position.
+    // For a simple example, let's say the robot's base can move left/right (along the camera's X axis)
+    // or forward/backward (along the camera's Y axis, representing depth).
+    // These would typically be 'base_x', 'base_y' (for vertical), and 'base_z' (for depth/forward-backward)
+
+
+    // Let's assume a normalized camera frame (0 to 1 for x,y).
+    // For Z, remember MediaPipe's normalized Z: smaller Z is closer to camera, 0 is at hip midpoint.
+
+    // Define robot base movement limits (example values, adjust for your robot's range)
+    const robotBaseXMin = -0.79; // Robot moves left
+    const robotBaseXMax = 0.79;  // Robot moves right
+    const robotBaseYMin = -0.87; // Robot moves "up" in robot space (if base_y is vertical)
+    const robotBaseYMax = 0.21;  // Robot moves "down" in robot space (if base_y is vertical)
+    const robotBaseZMin = -1.57; // Robot moves backward (further away)
+    const robotBaseZMax = 1.57;  // Robot moves forward (closer)
+
+    // Center of the camera view (normalized 0 to 1)
+    const cameraCenterX = 0.5;
+    const cameraCenterY = 0.5;
+
+    // --- Depth Calibration for overall robot position ---
+    const humanNeutralZ = 0.0; // Example: assuming 0 is neutral (hip origin). Adjust after observation.
+
+    // Map human torso X position to robot base X
+    const humanOffsetX = torsoCenterX - cameraCenterX;
+    let robotBaseX = humanOffsetX * 1.0;
+
+    // Map human torso Y position (vertical) to robot base Y
+    const humanVerticalOffset = torsoCenterY - cameraCenterY;
+    let robotBaseY = -humanVerticalOffset * 0.5;
+
+    // Map human torso Z position to robot base Z (depth)
+    let robotBaseZ_Positional = (humanNeutralZ - torsoCenterZ) * 1.5; // Renamed to avoid conflict with abs_z
+
+    // Apply smoothing and clamp to robot limits
+    robotBaseX = smooth('robot_base_x', robotBaseX);
+    robotBaseY = smooth('robot_base_y', robotBaseY);
+    robotBaseZ_Positional = smooth('robot_base_z_positional', robotBaseZ_Positional); // Smoothing for positional Z
+
+    robotBaseX = Math.max(robotBaseXMin, Math.min(robotBaseXMax, robotBaseX));
+    robotBaseY = Math.max(robotBaseYMin, Math.min(robotBaseYMax, robotBaseY));
+    robotBaseZ_Positional = Math.max(robotBaseZMin, Math.min(robotBaseZMax, robotBaseZ_Positional));
+
+    this.viewer?.updateJoint('base_x', robotBaseX);
+    this.viewer?.updateJoint('base_y', robotBaseY);
+    this.viewer?.updateJoint('base_z', robotBaseZ_Positional); // Note: Assuming 'base_z' controls positional depth
+
+    if (this.debugMode) {
+        console.log('Robot Base Movement (Based on Torso Center):', {
+            robotBaseX: robotBaseX.toFixed(3) + ' (Left/Right)',
+            robotBaseY: robotBaseY.toFixed(3) + ' (Up/Down)',
+            robotBaseZ_Positional: robotBaseZ_Positional.toFixed(3) + ' (Forward/Backward)',
+            humanOffsetX: humanOffsetX.toFixed(3),
+            humanVerticalOffset: humanVerticalOffset.toFixed(3),
+            humanDepthOffset: (humanNeutralZ - torsoCenterZ).toFixed(3),
+            currentTorsoZ: torsoCenterZ.toFixed(4)
+        });
+    }
+
+    // ... (rest of the code for arms, head, etc. if you have it)
+
+
+
+    // ... (rest of the code for arms, head, etc. if you have it)
+    // The previous abs_x and abs_y calculations are still relevant for torso *orientation*
+    // independent of the overall torso position.
+
+
+ */
+
+// --- Right Leg Logic ---
+const RIGHT_HIP = POSE.RIGHT_HIP; // Use POSE enum for consistency
+const RIGHT_KNEE = POSE.RIGHT_KNEE;
+const RIGHT_ANKLE = POSE.RIGHT_ANKLE;
+
+if (isValid(poseLandmarks[RIGHT_HIP]) &&
+    isValid(poseLandmarks[RIGHT_KNEE]) &&
+    isValid(poseLandmarks[RIGHT_ANKLE])) {
+
+    const hip = poseLandmarks[RIGHT_HIP];
+    const knee = poseLandmarks[RIGHT_KNEE];
+    const ankle = poseLandmarks[RIGHT_ANKLE];
+
+    // Debugging logs for right leg
+    if (this.debugMode) {
+        console.groupCollapsed('Right Leg Debug (Raw Landmarks)');
+        console.log(`R_Hip (24): x:${hip.x.toFixed(4)}, y:${hip.y.toFixed(4)}, z:${hip.z ? hip.z.toFixed(4) : 'N/A'}, vis:${hip.visibility ? hip.visibility.toFixed(4) : 'N/A'}`);
+        console.log(`R_Knee (26): x:${knee.x.toFixed(4)}, y:${knee.y.toFixed(4)}, z:${knee.z ? knee.z.toFixed(4) : 'N/A'}, vis:${knee.visibility ? knee.visibility.toFixed(4) : 'N/A'}`);
+        console.log(`R_Ankle (28): x:${ankle.x.toFixed(4)}, y:${ankle.y.toFixed(4)}, z:${ankle.z ? ankle.z.toFixed(4) : 'N/A'}, vis:${ankle.visibility ? ankle.visibility.toFixed(4) : 'N/A'}`);
+        console.groupEnd();
+    }
+
+    // Calculate thigh vector and shin vector
+    const thighVec = create2DVector(hip, knee);
+    const shinVec = create2DVector(knee, ankle);
+
+    // Calculate angles
+    const thighAngle = angle2D(thighVec); // Angle of thigh vector relative to positive X axis
+    const kneeAngle = angleBetweenVectors(thighVec, shinVec); // Internal angle at knee
+
+    // R_HIP_Y: Side leg movement (Abduction/Adduction)
+    // Positive legHorizontalOffset means knee moves to robot's right (human's left in mirrored view) which is abduction
+    // Robot's r_hip_y: negative for abduction, positive for adduction
+    let hipY = 0;
+    const legHorizontalOffset = knee.x - hip.x; 
+    const spreadSensitivity = 8.0; // from original code
+    hipY = -legHorizontalOffset * spreadSensitivity; // Invert for mirrored movement
+    hipY = smooth('r_hip_y', hipY);
+    hipY = Math.max(-1.48, Math.min(1.83, hipY));
+
+    // R_KNEE_Y: Knee bending
+    let kneeY = 0;
+    // Map human kneeAngle (PI for straight, 0 for bent) to robot knee_y (0.06 for straight, -2.34 for bent)
+    kneeY = (-2.4 / Math.PI) * kneeAngle + 0.06;
+    kneeY = smooth('r_knee_y', kneeY);
+    kneeY = Math.max(-2.34, Math.min(0.06, kneeY));
+
+    // R_ANKLE_Y: Ankle pitch (foot up/down)
+    let ankleY = 0;
+    const ankleRelativeY = ankle.y - knee.y; // Positive if ankle is below knee
+    const ankleSensitivity = 5.0; // from original code
+    ankleY = -ankleRelativeY * ankleSensitivity; // Invert to match typical ankle pitch
+    ankleY = smooth('r_ankle_y', ankleY);
+    ankleY = Math.max(-0.79, Math.min(0.79, ankleY));
+
+    // Update robot joints for right leg
+    // Removed: this.viewer?.updateJoint('r_hip_x', hipX);
+    this.viewer?.updateJoint('r_hip_y', hipY);
+    // Removed: this.viewer?.updateJoint('r_hip_z', hipZ);
+    this.viewer?.updateJoint('r_knee_y', kneeY);
+    this.viewer?.updateJoint('r_ankle_y', ankleY);
+
+    if (this.debugMode) {
+        console.log('2D Mapping Right Leg Results (Smoothed):', {
+            thighAngle: (thighAngle * 180 / Math.PI).toFixed(1) + '°',
+            kneeAngle: (kneeAngle * 180 / Math.PI).toFixed(1) + '°',
+            // Removed: hipX: hipX.toFixed(3),
+            hipY: hipY.toFixed(3),
+            // Removed: hipZ: hipZ.toFixed(3),
+            kneeY: kneeY.toFixed(3),
+            ankleY: ankleY.toFixed(3)
+        });
     }
 
 
-    mapLandmarksToRobot(poseLandmarks) {
-        const POSE = {
-            NOSE: 0,
-            LEFT_EYE_INNER: 1,
-            LEFT_EYE: 2,
-            LEFT_EYE_OUTER: 3,
-            RIGHT_EYE_INNER: 4,
-            RIGHT_EYE: 5,
-            RIGHT_EYE_OUTER: 6,
-            LEFT_EAR: 7,
-            RIGHT_EAR: 8,
-            LEFT_SHOULDER: 11,
-            LEFT_ELBOW: 13,
-            LEFT_WRIST: 15,
-            RIGHT_SHOULDER: 12,
-            RIGHT_ELBOW: 14,
-            RIGHT_WRIST: 16,
-            LEFT_HIP: 23,
-            RIGHT_HIP: 24,
-            LEFT_KNEE: 25,
-            RIGHT_KNEE: 26,
-            LEFT_ANKLE: 27,
-            RIGHT_ANKLE: 28,
-            LEFT_FOOT_INDEX: 31,
-            RIGHT_FOOT_INDEX: 32
-        };
+} else {
+    // If right leg landmarks are not valid, revert to initial pose values for stability.
+    if (this.debugMode) console.warn("Invalid right leg landmarks, defaulting to initial pose for right leg.");
+    this.viewer?.updateJoint('r_hip_x', this.initialRobotPose.r_hip_x); // Still defaulting, but no active calculation
+    this.viewer?.updateJoint('r_hip_y', this.initialRobotPose.r_hip_y);
+    this.viewer?.updateJoint('r_hip_z', this.initialRobotPose.r_hip_z); // Still defaulting, but no active calculation
+    this.viewer?.updateJoint('r_knee_y', this.initialRobotPose.r_knee_y);
+    this.viewer?.updateJoint('r_ankle_y', this.initialRobotPose.r_ankle_y);
+}
+       /* // --- Left Leg Logic ---
+        const LEFT_HIP = POSE.LEFT_HIP; // Use POSE enum for consistency
+        const LEFT_KNEE = POSE.LEFT_KNEE;
+        const LEFT_ANKLE = POSE.LEFT_ANKLE;
     
-        // Helper functions for 2D operations only
-        const create2DVector = (p1, p2) => ({
-            x: p2.x - p1.x,
-            y: p2.y - p1.y
-        });
+        if (isValid(poseLandmarks[LEFT_HIP]) &&
+            isValid(poseLandmarks[LEFT_KNEE]) &&
+            isValid(poseLandmarks[LEFT_ANKLE])) {
     
-        const angle2D = (vec) => Math.atan2(vec.y, vec.x);
-        
-        // Function to calculate angle between two vectors (e.g., upper arm and forearm)
-        // This calculates the internal angle at the elbow.
-        const angleBetweenVectors = (vec1, vec2) => {
-            const dotProduct = vec1.x * vec2.x + vec1.y * vec2.y;
-            const magnitude1 = vectorMagnitude(vec1);
-            const magnitude2 = vectorMagnitude(vec2);
-            if (magnitude1 === 0 || magnitude2 === 0) return 0; // Avoid division by zero
-            const clampedDotProduct = Math.max(-1, Math.min(1, dotProduct / (magnitude1 * magnitude2)));
-            return Math.acos(clampedDotProduct);
-        };
+            const hip = poseLandmarks[LEFT_HIP];
+            const knee = poseLandmarks[LEFT_KNEE];
+            const ankle = poseLandmarks[LEFT_ANKLE];
     
-        const vectorMagnitude = (vec) => Math.hypot(vec.x, vec.y);
-    
-        // Smoothing
-        if (!this.previousJointValues) this.previousJointValues = {};
-        const smooth = (jointName, value, alpha = 0.2) => {
-            if (isNaN(value)) {
-                if (this.debugMode) console.warn(`Smoothing: Input value for ${jointName} is NaN. Using previous or default.`);
-                return this.previousJointValues[jointName] || (this.initialRobotPose[jointName] || 0); // Handle NaN by returning previous or initial value
+            if (this.debugMode) {
+                console.groupCollapsed('Left Leg Debug (Raw Landmarks)');
+                console.log(`L_Hip (23): x:${hip.x.toFixed(4)}, y:${hip.y.toFixed(4)}, z:${hip.z ? hip.z.toFixed(4) : 'N/A'}, vis:${hip.visibility ? hip.visibility.toFixed(4) : 'N/A'}`);
+                console.log(`L_Knee (25): x:${knee.x.toFixed(4)}, y:${knee.y.toFixed(4)}, z:${knee.z ? knee.z.toFixed(4) : 'N/A'}, vis:${knee.visibility ? knee.visibility.toFixed(4) : 'N/A'}`);
+                console.log(`L_Ankle (27): x:${ankle.x.toFixed(4)}, y:${ankle.y.toFixed(4)}, z:${ankle.z ? ankle.z.toFixed(4) : 'N/A'}, vis:${ankle.visibility ? ankle.visibility.toFixed(4) : 'N/A'}`);
+                console.groupEnd();
             }
-            const prev = this.previousJointValues[jointName] ?? value; // Use value if no previous
-            const smoothed = prev * (1 - alpha) + value * alpha;
-            this.previousJointValues[jointName] = smoothed;
-            return smoothed;
-        };
     
-        // Landmark validation (visibility check for individual parts - still useful as a fallback for specific limbs)
-        const isValid = (landmark) => landmark && 
-            (landmark.visibility === undefined || landmark.visibility > 0.5); // Check visibility if available
+            const thighVec = create2DVector(hip, knee);
+            const shinVec = create2DVector(knee, ankle);
     
-        // --- Left Hand Logic ---
+            const thighAngle = angle2D(thighVec);
+            const kneeAngle = angleBetweenVectors(thighVec, shinVec);
+    
+            // L_HIP_X: Forward/Backward leg movement (Sagittal plane)
+            // Map thighAngle (approx 0 to PI) to l_hip_x (negative for backward, positive for forward, 0 for straight down)
+            // Neutral (straight down) is PI/2
+            // If human moves left leg forward (angle approaches 0), robot l_hip_x should be positive.
+            // If human moves left leg backward (angle approaches PI), robot l_hip_x should be negative.
+            // This is opposite of right leg.
+            let hipX = (Math.PI / 2 - thighAngle) * 0.7; // Invert for left leg
+            
+            hipX = smooth('l_hip_x', hipX);
+            hipX = Math.max(-0.52, Math.min(0.50, hipX)); // Clamped to robot limits (mirrored from right hip_x)
+    
+            // L_HIP_Y: Side leg movement (Abduction/Adduction)
+            // Positive legHorizontalOffset means knee moves to the user's left (robot's right in mirrored view) which is abduction
+            // Robot's l_hip_y: positive for abduction, negative for adduction
+            let hipY = 0;
+            const legHorizontalOffset = knee.x - hip.x; 
+            const spreadSensitivity = 5.0;
+            hipY = legHorizontalOffset * spreadSensitivity; 
+            hipY = smooth('l_hip_y', hipY);
+            hipY = Math.max(-1.83, Math.min(1.48, hipY)); // Clamped to robot limits (mirrored from right hip_y)
+    
+            // L_HIP_Z: Leg rotation (Internal/External rotation)
+            let hipZ = 0;
+            const ankleToKneeHorizontalOffset = ankle.x - knee.x;
+            const hipZSensitivity = 2.0;
+            hipZ = ankleToKneeHorizontalOffset * hipZSensitivity; 
+            hipZ = smooth('l_hip_z', hipZ);
+            hipZ = Math.max(-0.44, Math.min(1.57, hipZ)); // Clamped to robot limits (mirrored from right hip_z)
+    
+            // L_KNEE_Y: Knee bending
+            let kneeY = 0;
+            kneeY = (-2.4 / Math.PI) * kneeAngle + 0.06;
+            kneeY = smooth('l_knee_y', kneeY);
+            kneeY = Math.max(-2.34, Math.min(0.06, kneeY));
+    
+            // L_ANKLE_Y: Ankle pitch (foot up/down)
+            let ankleY = 0;
+            const ankleRelativeY = ankle.y - knee.y;
+            const ankleSensitivity = 5.0;
+            ankleY = -ankleRelativeY * ankleSensitivity;
+            ankleY = smooth('l_ankle_y', ankleY);
+            ankleY = Math.max(-0.79, Math.min(0.79, ankleY));
+    
+            // Update robot joints for left leg
+            this.viewer?.updateJoint('l_hip_x', hipX);
+            this.viewer?.updateJoint('l_hip_y', hipY);
+            this.viewer?.updateJoint('l_hip_z', hipZ);
+            this.viewer?.updateJoint('l_knee_y', kneeY);
+            this.viewer?.updateJoint('l_ankle_y', ankleY);
+    
+            if (this.debugMode) {
+                console.log('2D Mapping Left Leg Results (Smoothed):', {
+                    thighAngle: (thighAngle * 180 / Math.PI).toFixed(1) + '°',
+                    kneeAngle: (kneeAngle * 180 / Math.PI).toFixed(1) + '°',
+                    hipX: hipX.toFixed(3),
+                    hipY: hipY.toFixed(3),
+                    hipZ: hipZ.toFixed(3),
+                    kneeY: kneeY.toFixed(3),
+                    ankleY: ankleY.toFixed(3)
+                });
+            }
+    
+        } else {
+            // If left leg landmarks are not valid, revert to initial pose values for stability.
+            if (this.debugMode) console.warn("Invalid left leg landmarks, defaulting to initial pose for left leg.");
+            this.viewer?.updateJoint('l_hip_x', this.initialRobotPose.l_hip_x);
+            this.viewer?.updateJoint('l_hip_y', this.initialRobotPose.l_hip_y);
+            this.viewer?.updateJoint('l_hip_z', this.initialRobotPose.l_hip_z);
+            this.viewer?.updateJoint('l_knee_y', this.initialRobotPose.l_knee_y);
+            this.viewer?.updateJoint('l_ankle_y', this.initialRobotPose.l_ankle_y);
+        }
+*/
+
+  // --- Left Hand Logic ---
         if (!isValid(poseLandmarks[POSE.LEFT_SHOULDER]) || 
             !isValid(poseLandmarks[POSE.LEFT_ELBOW]) || 
             !isValid(poseLandmarks[POSE.LEFT_WRIST])) {
@@ -517,7 +1408,7 @@ export class MediaPipeHandController { // Consider renaming this to MediaPipePos
             
             // Add current length to history
             this.armLengthHistory_L.push(totalArmLength);
-            if (this.armLengthHistory_L.length > 20) {
+            if (this.armLengthHistory_L.length > 10) {
                 this.armLengthHistory_L.shift(); // Keep only last 20 samples
             }
             
@@ -728,177 +1619,7 @@ export class MediaPipeHandController { // Consider renaming this to MediaPipePos
             }
         }
     
-        // --- Head Logic ---
-        if (isValid(poseLandmarks[POSE.NOSE]) &&
-            isValid(poseLandmarks[POSE.LEFT_EYE_OUTER]) &&
-            isValid(poseLandmarks[POSE.RIGHT_EYE_OUTER]) &&
-            isValid(poseLandmarks[POSE.LEFT_EAR]) &&
-            isValid(poseLandmarks[POSE.RIGHT_EAR])) {
-    
-            const nose = poseLandmarks[POSE.NOSE];
-            const leftEye = poseLandmarks[POSE.LEFT_EYE_OUTER];
-            const rightEye = poseLandmarks[POSE.RIGHT_EYE_OUTER];
-
-            if (this.debugMode) {
-                console.groupCollapsed('Head Debug (Raw Landmarks)');
-                console.log(`Nose (0): x:${nose.x.toFixed(4)}, y:${nose.y.toFixed(4)}, z:${nose.z ? nose.z.toFixed(4) : 'N/A'}, vis:${nose.visibility ? nose.visibility.toFixed(4) : 'N/A'}`);
-                console.log(`L_Eye_Outer (3): x:${leftEye.x.toFixed(4)}, y:${leftEye.y.toFixed(4)}, z:${leftEye.z ? leftEye.z.toFixed(4) : 'N/A'}, vis:${leftEye.visibility ? leftEye.visibility.toFixed(4) : 'N/A'}`);
-                console.log(`R_Eye_Outer (6): x:${rightEye.x.toFixed(4)}, y:${rightEye.y.toFixed(4)}, z:${rightEye.z ? rightEye.z.toFixed(4) : 'N/A'}, vis:${rightEye.visibility ? rightEye.visibility.toFixed(4) : 'N/A'}`);
-                console.groupEnd();
-            }
-            
-            // --- Calculate head_z (Yaw - left/right rotation) ---
-            // Using the horizontal difference between the center of the eyes and the nose
-            const eyeMidpointX = (leftEye.x + rightEye.x) / 2;
-            const yawMovement = nose.x - eyeMidpointX;
-            const yawSensitivity = 15; // *** CALIBRATE THIS *** (e.g., 2 to 10)
-            let head_z_val = yawMovement * yawSensitivity;
-            
-            // Clamp to URDF limits
-            head_z_val = Math.max(-1.57079632679, Math.min(1.57079632679, head_z_val));
-            head_z_val = smooth('head_z', head_z_val);
-            this.viewer?.updateJoint('head_z', head_z_val);
-    
-            // --- Calculate head_y (Pitch - up/down rotation) ---
-            // Using the vertical difference between the nose and the average vertical position of the eyes.
-            const eyeMidpointY = (leftEye.y + rightEye.y) / 2;
-            const pitchMovement = nose.y - eyeMidpointY;
-            
-            const pitchSensitivity = 6; // *** CALIBRATE THIS *** (e.g., 2 to 10)
-            let head_y_val = -pitchMovement * pitchSensitivity; // Invert the movement
-            
-            // Clamp to URDF limits
-            head_y_val = Math.max(-0.785398163397, Math.min(0.10471975512, head_y_val));
-            head_y_val = smooth('head_y', head_y_val);
-            this.viewer?.updateJoint('head_y', head_y_val);
-    
-    
-            if (this.debugMode) {
-                console.log('2D Mapping Head Results (Smoothed):', {
-                    head_z: head_z_val.toFixed(3),
-                    head_y: head_y_val.toFixed(3)
-                });
-            }
-    
-        } else {
-            if (this.debugMode) console.warn("Invalid head landmarks, defaulting head joints to initial pose.");
-            this.viewer?.updateJoint('head_z', this.initialRobotPose.head_z);
-            this.viewer?.updateJoint('head_y', this.initialRobotPose.head_y);
-        }
-
-        // --- Right Leg Logic (Hip and Knee) ---
-        if (!isValid(poseLandmarks[POSE.RIGHT_HIP]) ||
-            !isValid(poseLandmarks[POSE.RIGHT_KNEE]) ||
-            !isValid(poseLandmarks[POSE.RIGHT_ANKLE])) {
-            if (this.debugMode) console.warn("Invalid right leg landmarks, defaulting to initial pose for right leg.");
-            this.viewer?.updateJoint('r_hip_y', this.initialRobotPose.r_hip_y);
-            this.viewer?.updateJoint('r_knee_y', this.initialRobotPose.r_knee_y);
-        } else {
-            const r_hip = poseLandmarks[POSE.RIGHT_HIP];
-            const r_knee = poseLandmarks[POSE.RIGHT_KNEE];
-            const r_ankle = poseLandmarks[POSE.RIGHT_ANKLE];
-
-            if (this.debugMode) {
-                console.groupCollapsed('Right Leg Debug (Raw Landmarks)');
-                console.log(`R_Hip (24): x:${r_hip.x.toFixed(4)}, y:${r_hip.y.toFixed(4)}, z:${r_hip.z ? r_hip.z.toFixed(4) : 'N/A'}, vis:${r_hip.visibility ? r_hip.visibility.toFixed(4) : 'N/A'}`);
-                console.log(`R_Knee (26): x:${r_knee.x.toFixed(4)}, y:${r_knee.y.toFixed(4)}, z:${r_knee.z ? r_knee.z.toFixed(4) : 'N/A'}, vis:${r_knee.visibility ? r_knee.visibility.toFixed(4) : 'N/A'}`);
-                console.log(`R_Ankle (28): x:${r_ankle.x.toFixed(4)}, y:${r_ankle.y.toFixed(4)}, z:${r_ankle.z ? r_ankle.z.toFixed(4) : 'N/A'}, vis:${r_ankle.visibility ? r_ankle.visibility.toFixed(4) : 'N/A'}`);
-                console.groupEnd();
-            }
-
-            // Hip_y: Controls thigh rotation (front/back)
-            // Use the vertical position of the hip relative to a baseline (e.g., shoulder) or use thigh vector angle.
-            // For now, let's use the difference in y between hip and knee, scaled.
-            // This might need more sophisticated mapping if you want to control rotation of hip.
-            let r_hip_y_val = 0; // Default or simple mapping
-
-            // Femur vector (hip to knee)
-            const femurVec_R = create2DVector(r_hip, r_knee);
-            // Tibia vector (knee to ankle)
-            const tibiaVec_R = create2DVector(r_knee, r_ankle);
-
-            // r_knee_y: Controls the knee bend.
-            // A straight leg is represented by r_knee_y = 0.
-            // As the knee bends backward, r_knee_y should become more negative (down to -1.5 for "knee back").
-
-            const currentKneeAngle_R = angleBetweenVectors(femurVec_R, tibiaVec_R); // Angle at human knee (radians)
-            
-            // For a straight leg, currentKneeAngle_R will be close to 0 radians (vectors point in same direction).
-            // As the knee bends backward, currentKneeAngle_R will increase.
-            // We want to map currentKneeAngle_R from 0 to some MAX_BEND_ANGLE_HUMAN to 0 to -1.5 for robot.
-
-            // A typical maximum human knee bend is around 140-150 degrees (approx 2.4-2.6 radians).
-            // Let's use 2.5 radians as a plausible max bend for scaling.
-            const MAX_HUMAN_KNEE_BEND_RADIANS = 2.5; // Tune this value as needed
-
-            // The mapping should be:
-            // When currentKneeAngle_R = 0, r_knee_y_val = 0
-            // When currentKneeAngle_R = MAX_HUMAN_KNEE_BEND_RADIANS, r_knee_y_val = -1.5
-            let r_knee_y_val = -(currentKneeAngle_R / MAX_HUMAN_KNEE_BEND_RADIANS) * 1.5; 
-
-            // Ensure the value does not go below the minimum limit (-1.5) and not above 0 (straight)
-            r_knee_y_val = Math.max(-1.5, Math.min(0, r_knee_y_val));
-            r_knee_y_val = smooth('r_knee_y', r_knee_y_val);
-            this.viewer?.updateJoint('r_knee_y', r_knee_y_val);
-
-            // Update robot joints for right leg
-            this.viewer?.updateJoint('r_hip_y', r_hip_y_val); // Only setting to 0 for now, implement actual mapping for hip_y
-            // r_knee_y is updated above
-
-            if (this.debugMode) {
-                console.log('Right Leg Results (Smoothed):', {
-                    r_hip_y: r_hip_y_val.toFixed(3),
-                    r_knee_y: r_knee_y_val.toFixed(3),
-                    currentKneeAngle: (currentKneeAngle_R * 180 / Math.PI).toFixed(1) + '°'
-                });
-            }
-        }
-
-        // --- Left Leg Logic (Hip and Knee) ---
-        if (!isValid(poseLandmarks[POSE.LEFT_HIP]) ||
-            !isValid(poseLandmarks[POSE.LEFT_KNEE]) ||
-            !isValid(poseLandmarks[POSE.LEFT_ANKLE])) {
-            if (this.debugMode) console.warn("Invalid left leg landmarks, defaulting to initial pose for left leg.");
-            this.viewer?.updateJoint('l_hip_y', this.initialRobotPose.l_hip_y);
-            this.viewer?.updateJoint('l_knee_y', this.initialRobotPose.l_knee_y);
-        } else {
-            const l_hip = poseLandmarks[POSE.LEFT_HIP];
-            const l_knee = poseLandmarks[POSE.LEFT_KNEE];
-            const l_ankle = poseLandmarks[POSE.LEFT_ANKLE];
-
-            if (this.debugMode) {
-                console.groupCollapsed('Left Leg Debug (Raw Landmarks)');
-                console.log(`L_Hip (23): x:${l_hip.x.toFixed(4)}, y:${l_hip.y.toFixed(4)}, z:${l_hip.z ? l_hip.z.toFixed(4) : 'N/A'}, vis:${l_hip.visibility ? l_hip.visibility.toFixed(4) : 'N/A'}`);
-                console.log(`L_Knee (25): x:${l_knee.x.toFixed(4)}, y:${l_knee.y.toFixed(4)}, z:${l_knee.z ? l_knee.z.toFixed(4) : 'N/A'}, vis:${l_knee.visibility ? l_knee.visibility.toFixed(4) : 'N/A'}`);
-                console.log(`L_Ankle (27): x:${l_ankle.x.toFixed(4)}, y:${l_ankle.y.toFixed(4)}, z:${l_ankle.z ? l_ankle.z.toFixed(4) : 'N/A'}, vis:${l_ankle.visibility ? l_ankle.visibility.toFixed(4) : 'N/A'}`);
-                console.groupEnd();
-            }
-
-            let l_hip_y_val = 0; // Default or simple mapping
-
-            const femurVec_L = create2DVector(l_hip, l_knee);
-            const tibiaVec_L = create2DVector(l_knee, l_ankle);
-
-            const currentKneeAngle_L = angleBetweenVectors(femurVec_L, tibiaVec_L);
-
-            const MAX_HUMAN_KNEE_BEND_RADIANS = 2.5; // Consistent with right leg
-
-            let l_knee_y_val = -(currentKneeAngle_L / MAX_HUMAN_KNEE_BEND_RADIANS) * 1.5;
-
-            l_knee_y_val = Math.max(-1.5, Math.min(0, l_knee_y_val));
-            l_knee_y_val = smooth('l_knee_y', l_knee_y_val);
-            this.viewer?.updateJoint('l_knee_y', l_knee_y_val);
-
-            this.viewer?.updateJoint('l_hip_y', l_hip_y_val);
-
-            if (this.debugMode) {
-                console.log('Left Leg Results (Smoothed):', {
-                    l_hip_y: l_hip_y_val.toFixed(3),
-                    l_knee_y: l_knee_y_val.toFixed(3),
-                    currentKneeAngle: (currentKneeAngle_L * 180 / Math.PI).toFixed(1) + '°'
-                });
-            }
-        }
+                            
     }
     
 } // End of MediaPipeHandController class
