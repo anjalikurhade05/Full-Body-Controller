@@ -19,15 +19,13 @@ This tool lets you load URDF models in a browser, visualize them in 3D, and cont
 ---
 
 ## 🚀 Getting Started
-
-### 1️⃣ Clone the Repository
-```bash
+1️⃣ Clone the Repository
 git clone https://github.com/anjalikurhade05/Full-Body-Controller.git
 cd Full-Body-Controller
-###2️⃣ Install Dependencies
+2️⃣ Install Dependencies
 Make sure you have Node.js v16+ installed, then run:
 npm install
-###3️⃣ Start the Frontend
+3️⃣ Start the Frontend
 npm run dev
 By default, the development server will be available at:
 http://localhost:5173
