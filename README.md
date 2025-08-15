@@ -24,14 +24,14 @@ This tool lets you load URDF models in a browser, visualize them in 3D, and cont
 ```bash
 git clone https://github.com/anjalikurhade05/Full-Body-Controller.git
 cd Full-Body-Controller
-2️⃣ Install Dependencies
+###2️⃣ Install Dependencies
 Make sure you have Node.js v16+ installed, then run:
 npm install
-3️⃣ Start the Frontend
+###3️⃣ Start the Frontend
 npm run dev
 By default, the development server will be available at:
 http://localhost:5173
-🤖 Running for Each Robot
+###🤖 Running for Each Robot
 1.Poppy Humanoid (with backend)
 Frontend:
 Open http://localhost:5173/src/humanoid_viewer/humanoid_test.html in your browser.
