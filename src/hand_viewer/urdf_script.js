@@ -16,7 +16,7 @@ class ProfessionalURDFViewer {
         this.autoRotateEnabled = false;
         this.stats = { links: 0, joints: 0, triangles: 0 };
         this.handController = null; // Ensure this property is declared in the class or constructor
-
+        this.backgroundScene = null
         // this.controls = null;
 
         this.init();
@@ -78,7 +78,51 @@ class ProfessionalURDFViewer {
         } else {
             console.error("Webcam video element not found in the DOM.");
         }
+
+          // ✅ Add this block BELOW the rest of init logic:
+    document.getElementById('bgInput').addEventListener('change', (event) => {
+        const file = event.target.files[0];
+        if (file && file.name.endsWith('.fbx')) {
+            this.loadBackgroundFBX(file);
+        } else {
+            alert("Please select a valid .fbx file.");
+        }
+    });
     }
+
+    loadBackgroundFBX(file) {
+    const loader = new THREE.FBXLoader();
+    const url = URL.createObjectURL(file);
+
+    loader.load(
+        url,
+        (object) => {
+            object.scale.set(0.02, 0.02, 0.02); // Adjust depending on the model size
+            object.position.set(0, 0, 0);       // Adjust if the floor or layout looks off
+            object.traverse((child) => {
+                if (child.isMesh) {
+                    child.castShadow = true;
+                    child.receiveShadow = true;
+                }
+            });
+
+            if (this.backgroundScene) {
+                this.scene.remove(this.backgroundScene);
+            }
+
+            this.backgroundScene = object;
+            this.scene.add(this.backgroundScene);
+
+            console.log("✅ Background FBX loaded successfully.");
+        },
+        (xhr) => {
+            console.log(`Background loading: ${Math.round((xhr.loaded / xhr.total) * 100)}%`);
+        },
+        (error) => {
+            console.error("❌ Failed to load FBX background:", error);
+        }
+    );
+}
 
 
     setupLighting() {
