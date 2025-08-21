@@ -24,16 +24,16 @@ class ProfessionalURDFViewer {
         this.handController = null; // Ensure this property is declared in the class or constructor
 
 
-        
+      /*  
         // NEW: WebSocket properties
         this.websocket = null;
         this.websocketConnected = false;
-
+*/
     
         this.init();
         this.setupEventListeners();
         this.animate();
-         this.connectWebSocket();
+       
     }
 
     init() {
@@ -89,7 +89,7 @@ class ProfessionalURDFViewer {
             console.error("Webcam video element not found in the DOM.");
         }
     }
- 
+ /*
      connectWebSocket() {
         const wsUrl = 'ws://localhost:8765'; // Ensure this matches your main.py WebSocket server port
         this.updateStatus('Attempting to connect to PyBullet...', 'info');
@@ -121,7 +121,7 @@ class ProfessionalURDFViewer {
             this.updateStatus('WebSocket error. Is the Python script running?', 'error');
         };
     }
-
+*/
     setupLighting() {
         // Ambient light
         const ambientLight = new THREE.AmbientLight(0x404060, 0.3);
@@ -1072,7 +1072,7 @@ async loadSOARM100() {
         }
         
         joint.currentValue = value;
-
+/*
         // NEW: Send joint command to PyBullet via WebSocket
     if (this.websocketConnected) {
         const message = {
@@ -1085,7 +1085,7 @@ async loadSOARM100() {
     } else {
         // You can uncomment the line below for debugging, but it can be very noisy
          console.warn('WebSocket not connected. Cannot send joint command:', jointName, value);
-    }
+    }*/
     }
 
     toggleAxes(show) {

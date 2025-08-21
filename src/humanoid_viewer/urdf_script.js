@@ -36,51 +36,55 @@ class ProfessionalURDFViewer {
         this.animate();
     }
     
-    // --- UPDATED: Method to add or update external objects for correct position ---
-    syncExternalObject(objData) {
-        let objMesh = this.externalObjects.get(objData.id);
+  // --- UPDATED: Method to add or update external objects for correct position ---
+syncExternalObject(objData) {
+    let objMesh = this.externalObjects.get(objData.id);
 
-        if (!objMesh) {
-            let geometry, material;
-            if (objData.type === 'cube') {
-                // PyBullet half-extent of 0.1 means a full side length of 0.2
-                geometry = new THREE.BoxGeometry(0.2, 0.2, 0.2); 
-                material = new THREE.MeshBasicMaterial({ color: 0xff8c00 });
-            } else if (objData.type === 'ball') {
-                // PyBullet radius of 0.1 is the same for Three.js
-                geometry = new THREE.SphereGeometry(0.1, 32, 32); 
-                material = new THREE.MeshBasicMaterial({ color: 0x0000ff });
-            }
-
-            if (geometry && material) {
-                objMesh = new THREE.Mesh(geometry, material);
-                this.scene.add(objMesh);
-                this.externalObjects.set(objData.id, objMesh);
-            }
+    if (!objMesh) {
+        let geometry, material;
+        if (objData.type === 'cube') {
+            const size = 0.05 * 2;
+            geometry = new THREE.BoxGeometry(size, size, size);
+            material = new THREE.MeshBasicMaterial({ color: 0x00ff00 }); 
+        } else if (objData.type === 'test_cube') {
+            const size = 0.1 * 2;
+            geometry = new THREE.BoxGeometry(size, size, size);
+            material = new THREE.MeshBasicMaterial({ color: 0xff8c00 });
+        } else if (objData.type === 'ball') {
+            geometry = new THREE.SphereGeometry(0.1, 32, 32);
+            material = new THREE.MeshBasicMaterial({ color: 0x0000ff });
         }
+        /*
+        // Commented out to ignore table geometry and material creation
+        else if (objData.type === 'table') {
+            const dims = [0.6 * 2, 0.8 * 2, 0.05 * 2];
+            // Corrected BoxGeometry constructor order: width, height, depth
+            geometry = new THREE.BoxGeometry(dims[0], dims[2], dims[1]); 
+            material = new THREE.MeshBasicMaterial({ color: 0x808080 });
+        }
+        */
 
-        if (objMesh) {
-            // Get the PyBullet position directly
-            const pybulletPos = new THREE.Vector3(
-                objData.position[0], 
-                objData.position[1], 
-                objData.position[2]
-            );
-            
-            // Correctly convert the PyBullet Z-up position to Three.js Y-up
-            // The Z and Y coordinates are swapped and the new Y-axis is inverted
-            const threejsPos = new THREE.Vector3(pybulletPos.x, pybulletPos.z, -pybulletPos.y);
-
-            // Correctly convert the PyBullet quaternion to Three.js
-            const pybulletQuat = new THREE.Quaternion(objData.orientation[0], objData.orientation[1], objData.orientation[2], objData.orientation[3]);
-            const eulerZup = new THREE.Euler().setFromQuaternion(pybulletQuat, 'XYZ');
-            const threejsQuat = new THREE.Quaternion().setFromEuler(new THREE.Euler(eulerZup.x, eulerZup.z, -eulerZup.y, 'XYZ'));
-
-            objMesh.position.copy(threejsPos);
-            objMesh.quaternion.copy(threejsQuat);
+        if (geometry && material) {
+            objMesh = new THREE.Mesh(geometry, material);
+            this.scene.add(objMesh);
+            this.externalObjects.set(objData.id, objMesh);
         }
     }
 
+    if (objMesh) {
+        // Correct the position from PyBullet's Z-up to Three.js's Y-up
+        const pybulletPos = new THREE.Vector3(objData.position[0], objData.position[1], objData.position[2]);
+        const threejsPos = new THREE.Vector3(pybulletPos.x, pybulletPos.z, -pybulletPos.y);
+
+        // Correct the orientation from PyBullet's Z-up to Three.js's Y-up
+        const pybulletQuat = new THREE.Quaternion(objData.orientation[0], objData.orientation[1], objData.orientation[2], objData.orientation[3]);
+        const threejsQuat = new THREE.Quaternion(pybulletQuat.x, pybulletQuat.z, -pybulletQuat.y, pybulletQuat.w);
+
+        // Apply the corrected position and orientation to the mesh
+        objMesh.position.copy(threejsPos);
+        objMesh.quaternion.copy(threejsQuat);
+    }
+}
 connectWebSocket() {
         const wsUrl = 'ws://localhost:8765';
         this.updateStatus('Connecting to PyBullet...', 'info');
@@ -157,6 +161,252 @@ updateJointVisual(jointName, value) {
         slider.nextElementSibling.textContent = value.toFixed(2);
     }
 }
+ updateJoint(jointName, value) {
+    console.log('Received joint update:', jointName, value); 
+    // Check if the WebSocket exists and is in the OPEN state (readyState === 1)
+    if (this.websocket && this.websocket.readyState === WebSocket.OPEN) {
+        const message = {
+            type: 'joint_command',
+            joint_name: jointName,
+            target_position: value
+        };
+        this.websocket.send(JSON.stringify(message));
+    } else {
+        // Optional: Add a debug line to see when the message is not sent
+        console.warn('WebSocket not open. Not sending joint command.');
+    }
+}
+ // New method to load robot from file input (if UI is still used)
+    async loadRobotFromFileInput() {
+        const urdfFile = document.getElementById('urdfInput').files[0];
+        if (!urdfFile) {
+            this.updateStatus('Please select a URDF file.', 'error');
+            return;
+        }
+
+        this.updateStatus('Loading robot...', 'loading');
+        document.getElementById('loadButtonText').innerHTML =
+            '<div class="loading-spinner"></div>Loading...';
+
+        try {
+            const urdfContent = await this.readFile(urdfFile);
+            await this._loadRobotInternal(urdfContent); // Use internal loading function
+            this.updateStatus('Robot loaded successfully!', 'success');
+            document.getElementById('loadButtonText').textContent = 'Load Robot';
+        } catch (error) {
+            console.error('Error loading robot:', error);
+            this.updateStatus('Error loading robot: ' + error.message, 'error');
+            document.getElementById('loadButtonText').textContent = 'Load Robot';
+        }
+    }
+
+    // Centralized internal loading logic
+   async _loadRobotInternal(urdfContent, robotName) {
+    // 1. Create a new group for this specific robot
+    const newRobotGroup = new THREE.Group();
+    newRobotGroup.name = robotName;
+    this.scene.add(newRobotGroup);
+
+    // 2. Store the new robot group in a map
+    this.robots.set(robotName, newRobotGroup);
+
+    // 3. Create new maps for this robot's joints and links
+    const newJointsMap = {};
+    const newLinksMap = {};
+    this.jointData.set(robotName, newJointsMap);
+    this.linkData.set(robotName, newLinksMap);
+
+    // 4. Clear and reset helper data for just this new robot
+    this.axesHelpers = [];
+    this.loadedGeometries.clear();
+
+    // 5. Call parseURDF with the new, specific data structures
+    await this.parseURDF(urdfContent, newRobotGroup, newLinksMap, newJointsMap);
+
+    // 6. Set an initial position for the new robot to prevent overlapping
+if (robotName === 'poppy') {
+            newRobotGroup.position.set(0, 0.5, 0);
+        } 
+        else if (robotName.toLowerCase().includes('kitchen')) {
+        // Position Kitchen
+        newRobotGroup.position.set(0.4, 0, 0);
+    }
+        else {
+            // Position other robots in a staggered way
+            const robotCount = this.robots.size;
+            newRobotGroup.position.set((robotCount - 1) * 3, 0, 0);
+        }
+    newRobotGroup.rotation.x = -Math.PI / 2;
+
+    
+    // 7. Rebuild the joint controls UI to include the new robot's joints
+    this.createJointControls();
+
+    // 8. Adjust the camera and update the stats
+    this.fitCameraToObject();
+    this.updateStatsDisplay();
+}
+
+    updateStatsDisplay() {
+    let totalLinkCount = 0;
+    let totalJointCount = 0;
+    let totalTriangleCount = 0;
+
+    // 1. Sum up link counts from all loaded robots
+    for (const linksMap of this.linkData.values()) {
+        totalLinkCount += Object.keys(linksMap).length;
+    }
+
+    // 2. Sum up joint counts from all loaded robots
+    for (const jointsMap of this.jointData.values()) {
+        totalJointCount += Object.keys(jointsMap).length;
+    }
+
+    // 3. Sum up triangle counts from all loaded robots
+    if (this.robots) {
+        for (const robotGroup of this.robots.values()) {
+            robotGroup.traverse(child => {
+                if (child.isMesh && child.geometry) {
+                    const positions = child.geometry.attributes.position;
+                    if (positions) {
+                        totalTriangleCount += positions.count / 3;
+                    }
+                }
+            });
+        }
+    }
+    
+    // 4. Update the UI with the new, aggregated counts
+    document.getElementById('linkCount').textContent = totalLinkCount;
+    document.getElementById('jointCount').textContent = totalJointCount;
+    this.stats.triangles = Math.floor(totalTriangleCount);
+    document.getElementById('triangleCount').textContent = this.stats.triangles;
+}
+
+    toggleWireframe(wireframe) {
+        if (this.robots) {
+            this.robots.traverse(child => {
+                if (child.isMesh && child.material) {
+                    if (Array.isArray(child.material)) {
+                        child.material.forEach(mat => {
+                            if (mat.isMaterial) mat.wireframe = wireframe;
+                        });
+                    } else if (child.material.isMaterial) {
+                        child.material.wireframe = wireframe;
+                    }
+                }
+            });
+        }
+    }
+     fitCameraToObject() {
+        if (!this.robots || !this.robots.children.length) {
+            this.resetCamera();
+            return;
+        }
+
+        const box = new THREE.Box3().setFromObject(this.robots);
+        if (box.isEmpty()) {
+            this.resetCamera();
+            return;
+        }
+
+        const size = box.getSize(new THREE.Vector3());
+        const center = box.getCenter(new THREE.Vector3());
+
+        const maxDim = Math.max(size.x, size.y, size.z);
+        const fov = this.camera.fov * (Math.PI / 180);
+        let cameraZ = Math.abs(maxDim / 2 / Math.tan(fov / 2));
+
+        cameraZ *= 1.5;
+
+        this.camera.position.set(center.x + cameraZ, center.y + cameraZ, center.z + cameraZ);
+        this.camera.lookAt(center);
+    }
+
+
+    animate() {
+        requestAnimationFrame(() => this.animate());
+
+        if (this.autoRotateEnabled) {
+            this.robots.rotation.z += 0.005;
+        }
+
+        this.renderer.render(this.scene, this.camera);
+    }
+    
+    async parseURDF(urdfContent, targetGroup, linksMap, jointsMap) {
+    const parser = new DOMParser();
+    const xmlDoc = parser.parseFromString(urdfContent, "text/xml");
+
+    const rootElement = xmlDoc.getElementsByTagName('robot')[0];
+    if (!rootElement) {
+        throw new Error("Invalid URDF: No 'robot' tag found.");
+    }
+
+    const links = xmlDoc.getElementsByTagName('link');
+    for (let link of links) {
+        // Use the linksMap for storing links
+        await this.parseLink(link, linksMap); 
+    }
+
+    const joints = xmlDoc.getElementsByTagName('joint');
+    for (let joint of joints) {
+        // Use the jointsMap for storing joints
+        this.parseJoint(joint, jointsMap);
+    }
+
+    let rootLinkName = null;
+    const childLinkNames = new Set(Object.values(jointsMap).map(j => j.child)); // Use jointsMap
+    for (const linkName in linksMap) { // Use linksMap
+        if (!childLinkNames.has(linkName)) {
+            rootLinkName = linkName;
+            break;
+        }
+    }
+
+    // Attach the root link to the targetGroup
+    if (rootLinkName && linksMap[rootLinkName]) { // Use linksMap
+        targetGroup.add(linksMap[rootLinkName]);
+    } else if (Object.keys(linksMap).length > 0) {
+        console.warn("Could not determine a clear root link. Adding first link to scene root.");
+        targetGroup.add(Object.values(linksMap)[0]);
+    }
+
+    // Attach child links to their parents
+    for (const jointName in jointsMap) { // Use jointsMap
+        const joint = jointsMap[jointName];
+        const parentLinkGroup = linksMap[joint.parent]; // Use linksMap
+        const childLinkGroup = linksMap[joint.child]; // Use linksMap
+
+        if (parentLinkGroup && childLinkGroup) {
+            parentLinkGroup.add(childLinkGroup);
+
+            if (joint.origin) {
+                this.applyOrigin(childLinkGroup, joint.origin);
+            }
+
+            joint.initialPosition = childLinkGroup.position.clone();
+            joint.initialRotation = childLinkGroup.quaternion.clone();
+
+            const axisHelper = new THREE.ArrowHelper(
+                new THREE.Vector3(...joint.axis).normalize(),
+                new THREE.Vector3(0, 0, 0),
+                0.1,
+                0xff0000,
+                0.05,
+                0.02
+            );
+            childLinkGroup.add(axisHelper);
+            this.axesHelpers.push(axisHelper); // axesHelpers can remain class-wide
+        } else {
+            console.warn(`Missing parent or child link for joint: ${jointName}`);
+        }
+    }
+
+    // The createJointControls function will be called once after parsing all robots
+    // so we can remove this call from here.
+}
+
     init() {
         // Scene setup with professional lighting
         this.scene = new THREE.Scene();
@@ -410,76 +660,7 @@ setupEventListeners() {
         this.updateStatus(`Loaded ${files.length} potential mesh files for lookup.`, 'success');
     }
 
-    // New method to load robot from file input (if UI is still used)
-    async loadRobotFromFileInput() {
-        const urdfFile = document.getElementById('urdfInput').files[0];
-        if (!urdfFile) {
-            this.updateStatus('Please select a URDF file.', 'error');
-            return;
-        }
-
-        this.updateStatus('Loading robot...', 'loading');
-        document.getElementById('loadButtonText').innerHTML =
-            '<div class="loading-spinner"></div>Loading...';
-
-        try {
-            const urdfContent = await this.readFile(urdfFile);
-            await this._loadRobotInternal(urdfContent); // Use internal loading function
-            this.updateStatus('Robot loaded successfully!', 'success');
-            document.getElementById('loadButtonText').textContent = 'Load Robot';
-        } catch (error) {
-            console.error('Error loading robot:', error);
-            this.updateStatus('Error loading robot: ' + error.message, 'error');
-            document.getElementById('loadButtonText').textContent = 'Load Robot';
-        }
-    }
-
-    // Centralized internal loading logic
-   async _loadRobotInternal(urdfContent, robotName) {
-    // 1. Create a new group for this specific robot
-    const newRobotGroup = new THREE.Group();
-    newRobotGroup.name = robotName;
-    this.scene.add(newRobotGroup);
-
-    // 2. Store the new robot group in a map
-    this.robots.set(robotName, newRobotGroup);
-
-    // 3. Create new maps for this robot's joints and links
-    const newJointsMap = {};
-    const newLinksMap = {};
-    this.jointData.set(robotName, newJointsMap);
-    this.linkData.set(robotName, newLinksMap);
-
-    // 4. Clear and reset helper data for just this new robot
-    this.axesHelpers = [];
-    this.loadedGeometries.clear();
-
-    // 5. Call parseURDF with the new, specific data structures
-    await this.parseURDF(urdfContent, newRobotGroup, newLinksMap, newJointsMap);
-
-    // 6. Set an initial position for the new robot to prevent overlapping
-if (robotName === 'poppy') {
-            newRobotGroup.position.set(0, 0.5, 0);
-        } 
-        else if (robotName.toLowerCase().includes('kitchen')) {
-        // Position Kitchen
-        newRobotGroup.position.set(0.4, 0, 0);
-    }
-        else {
-            // Position other robots in a staggered way
-            const robotCount = this.robots.size;
-            newRobotGroup.position.set((robotCount - 1) * 3, 0, 0);
-        }
-    newRobotGroup.rotation.x = -Math.PI / 2;
-
-    
-    // 7. Rebuild the joint controls UI to include the new robot's joints
-    this.createJointControls();
-
-    // 8. Adjust the camera and update the stats
-    this.fitCameraToObject();
-    this.updateStatsDisplay();
-}
+   
     // This is the new function to be called for automatic loading
     async loadPoppyHumanoid() {
         this.updateStatus('Automatically loading Poppy Humanoid...', 'loading');
@@ -638,116 +819,6 @@ if (robotName === 'poppy') {
             reader.readAsText(file);
         });
     }
-
-    async parseURDF(urdfContent, targetGroup, linksMap, jointsMap) {
-    const parser = new DOMParser();
-    const xmlDoc = parser.parseFromString(urdfContent, "text/xml");
-
-    const rootElement = xmlDoc.getElementsByTagName('robot')[0];
-    if (!rootElement) {
-        throw new Error("Invalid URDF: No 'robot' tag found.");
-    }
-
-    const links = xmlDoc.getElementsByTagName('link');
-    for (let link of links) {
-        // Use the linksMap for storing links
-        await this.parseLink(link, linksMap); 
-    }
-
-    const joints = xmlDoc.getElementsByTagName('joint');
-    for (let joint of joints) {
-        // Use the jointsMap for storing joints
-        this.parseJoint(joint, jointsMap);
-    }
-
-    let rootLinkName = null;
-    const childLinkNames = new Set(Object.values(jointsMap).map(j => j.child)); // Use jointsMap
-    for (const linkName in linksMap) { // Use linksMap
-        if (!childLinkNames.has(linkName)) {
-            rootLinkName = linkName;
-            break;
-        }
-    }
-
-    // Attach the root link to the targetGroup
-    if (rootLinkName && linksMap[rootLinkName]) { // Use linksMap
-        targetGroup.add(linksMap[rootLinkName]);
-    } else if (Object.keys(linksMap).length > 0) {
-        console.warn("Could not determine a clear root link. Adding first link to scene root.");
-        targetGroup.add(Object.values(linksMap)[0]);
-    }
-
-    // Attach child links to their parents
-    for (const jointName in jointsMap) { // Use jointsMap
-        const joint = jointsMap[jointName];
-        const parentLinkGroup = linksMap[joint.parent]; // Use linksMap
-        const childLinkGroup = linksMap[joint.child]; // Use linksMap
-
-        if (parentLinkGroup && childLinkGroup) {
-            parentLinkGroup.add(childLinkGroup);
-
-            if (joint.origin) {
-                this.applyOrigin(childLinkGroup, joint.origin);
-            }
-
-            joint.initialPosition = childLinkGroup.position.clone();
-            joint.initialRotation = childLinkGroup.quaternion.clone();
-
-            const axisHelper = new THREE.ArrowHelper(
-                new THREE.Vector3(...joint.axis).normalize(),
-                new THREE.Vector3(0, 0, 0),
-                0.1,
-                0xff0000,
-                0.05,
-                0.02
-            );
-            childLinkGroup.add(axisHelper);
-            this.axesHelpers.push(axisHelper); // axesHelpers can remain class-wide
-        } else {
-            console.warn(`Missing parent or child link for joint: ${jointName}`);
-        }
-    }
-
-    // The createJointControls function will be called once after parsing all robots
-    // so we can remove this call from here.
-}
-
-
-    updateStatsDisplay() {
-    let totalLinkCount = 0;
-    let totalJointCount = 0;
-    let totalTriangleCount = 0;
-
-    // 1. Sum up link counts from all loaded robots
-    for (const linksMap of this.linkData.values()) {
-        totalLinkCount += Object.keys(linksMap).length;
-    }
-
-    // 2. Sum up joint counts from all loaded robots
-    for (const jointsMap of this.jointData.values()) {
-        totalJointCount += Object.keys(jointsMap).length;
-    }
-
-    // 3. Sum up triangle counts from all loaded robots
-    if (this.robots) {
-        for (const robotGroup of this.robots.values()) {
-            robotGroup.traverse(child => {
-                if (child.isMesh && child.geometry) {
-                    const positions = child.geometry.attributes.position;
-                    if (positions) {
-                        totalTriangleCount += positions.count / 3;
-                    }
-                }
-            });
-        }
-    }
-    
-    // 4. Update the UI with the new, aggregated counts
-    document.getElementById('linkCount').textContent = totalLinkCount;
-    document.getElementById('jointCount').textContent = totalJointCount;
-    this.stats.triangles = Math.floor(totalTriangleCount);
-    document.getElementById('triangleCount').textContent = this.stats.triangles;
-}
 
     async parseLink(linkElement,linksMap) {
         const name = linkElement.getAttribute('name');
@@ -1124,74 +1195,21 @@ if (robotName === 'poppy') {
         });
     }
 
-    updateJoint(jointName, value) {
-    console.log('Received joint update:', jointName, value); 
-    // Check if the WebSocket exists and is in the OPEN state (readyState === 1)
-    if (this.websocket && this.websocket.readyState === WebSocket.OPEN) {
-        const message = {
-            type: 'joint_command',
-            joint_name: jointName,
-            target_position: value
-        };
-        this.websocket.send(JSON.stringify(message));
-    } else {
-        // Optional: Add a debug line to see when the message is not sent
-        console.warn('WebSocket not open. Not sending joint command.');
-    }
-}
-
+   
     toggleAxes(show) {
         this.axesHelpers.forEach(helper => {
             helper.visible = show;
         });
     }
 
-    toggleWireframe(wireframe) {
-        if (this.robots) {
-            this.robots.traverse(child => {
-                if (child.isMesh && child.material) {
-                    if (Array.isArray(child.material)) {
-                        child.material.forEach(mat => {
-                            if (mat.isMaterial) mat.wireframe = wireframe;
-                        });
-                    } else if (child.material.isMaterial) {
-                        child.material.wireframe = wireframe;
-                    }
-                }
-            });
-        }
-    }
-
+   
     toggleGrid(show) {
         if (this.gridHelper) {
             this.gridHelper.visible = show;
         }
     }
 
-    fitCameraToObject() {
-        if (!this.robots || !this.robots.children.length) {
-            this.resetCamera();
-            return;
-        }
-
-        const box = new THREE.Box3().setFromObject(this.robots);
-        if (box.isEmpty()) {
-            this.resetCamera();
-            return;
-        }
-
-        const size = box.getSize(new THREE.Vector3());
-        const center = box.getCenter(new THREE.Vector3());
-
-        const maxDim = Math.max(size.x, size.y, size.z);
-        const fov = this.camera.fov * (Math.PI / 180);
-        let cameraZ = Math.abs(maxDim / 2 / Math.tan(fov / 2));
-
-        cameraZ *= 1.5;
-
-        this.camera.position.set(center.x + cameraZ, center.y + cameraZ, center.z + cameraZ);
-        this.camera.lookAt(center);
-    }
+   
 
     updateStatus(message, type) {
         const statusDiv = document.getElementById('status');
@@ -1201,15 +1219,6 @@ if (robotName === 'poppy') {
         }
     }
 
-    animate() {
-        requestAnimationFrame(() => this.animate());
-
-        if (this.autoRotateEnabled) {
-            this.robots.rotation.z += 0.005;
-        }
-
-        this.renderer.render(this.scene, this.camera);
-    }
 }
 window.addEventListener('DOMContentLoaded',  () => {
     window.viewer = new ProfessionalURDFViewer();
@@ -1227,132 +1236,3 @@ window.addEventListener('resize', () => {
     }
 });
 
-
-/*
-import { MediaPipeHandController } from './mediapipe_pose_controller.js';
-
-class HybridViewController {
-    constructor() {
-        this.joints = {};
-        this.objects = {}; // <-- NEW: store dynamic objects like the ball
-        this.websocket = null;
-        this.websocketConnected = false;
-        this.init();
-    }
-
-    init() {
-        this.connectWebSocket();
-        this.setupEventListeners();
-        // The MediaPipe controller will be initialized automatically from its own file
-    }
-
-    connectWebSocket() {
-        const wsUrl = 'ws://localhost:8765';
-        this.updateStatus('Connecting to PyBullet...', 'info');
-        this.websocket = new WebSocket(wsUrl);
-
-        this.websocket.onopen = () => {
-            this.websocketConnected = true;
-            this.updateStatus('Connected to PyBullet.', 'success');
-        };
-
-        // --- NEW: Listen for state updates from backend ---
-        this.websocket.onmessage = (event) => {
-            try {
-                const msg = JSON.parse(event.data);
-                if (msg.type === "sim_state") {
-                    // Update robot joints if your viewer supports it
-                    for (const [jointName, jointValue] of Object.entries(msg.joints)) {
-                        if (typeof this.updateJointVisual === "function") {
-                            this.updateJointVisual(jointName, jointValue);
-                        }
-                    }
-
-                    // Update or create dynamic objects like the ball
-                    msg.objects.forEach(obj => {
-                        if (!this.objects[obj.name]) {
-                            if (obj.name === "ball") {
-                                const geometry = new THREE.SphereGeometry(0.05, 32, 32);
-                                const material = new THREE.MeshStandardMaterial({ color: 0xff0000 });
-                                const sphere = new THREE.Mesh(geometry, material);
-                                sphere.castShadow = true;
-                                sphere.receiveShadow = true;
-                                if (this.scene) {
-                                    this.scene.add(sphere); // requires that your viewer has a Three.js scene
-                                }
-                                this.objects[obj.name] = sphere;
-                            }
-                        }
-                        const mesh = this.objects[obj.name];
-                        if (mesh) {
-                            mesh.position.set(...obj.position);
-                            mesh.quaternion.set(...obj.orientation);
-                        }
-                    });
-                }
-            } catch (err) {
-                console.error("Error processing sim_state:", err);
-            }
-        };
-        // ---------------------------------------------------
-
-        this.websocket.onclose = () => {
-            this.websocketConnected = false;
-            this.updateStatus('Disconnected. Reconnecting...', 'error');
-            setTimeout(() => this.connectWebSocket(), 3000);
-        };
-
-        this.websocket.onerror = (err) => {
-            this.updateStatus('WebSocket Error. Is main.py running?', 'error');
-        };
-    }
-
-    setupEventListeners() {
-        // Disable 3D-specific controls that no longer do anything
-        document.getElementById('showAxes').disabled = true;
-        document.getElementById('wireframe').disabled = true;
-        document.getElementById('showGrid').disabled = true;
-        document.getElementById('autoRotate').disabled = true;
-
-        // The MediaPipe controller will handle its own buttons now.
-        // We just ensure we provide the updateJoint function it needs.
-    }
-
-    updateJoint(jointName, value) {
-        if (this.websocketConnected) {
-            const message = {
-                type: 'joint_command',
-                joint_name: jointName,
-                target_position: value
-            };
-            this.websocket.send(JSON.stringify(message));
-        }
-    }
-
-    // --- NEW: Optional hook for visual joint updates ---
-    updateJointVisual(jointName, value) {
-        if (this.joints[jointName]) {
-            this.joints[jointName].setJointValue(value);
-        }
-    }
-    // ---------------------------------------------------
-
-    updateStatus(message, type) {
-        const statusDiv = document.getElementById('status');
-        if (statusDiv) {
-            statusDiv.textContent = message;
-            statusDiv.className = `status-${type}`;
-        }
-    }
-}
-
-// Initialize the controller and connect it to the MediaPipe module
-window.addEventListener('DOMContentLoaded', () => {
-    const viewer = new HybridViewController();
-    // The MediaPipe controller is now self-initializing but needs a reference to the viewer
-    // to call `updateJoint`. We can pass the viewer instance to it.
-    const webcamElement = document.getElementById('webcam');
-    if (webcamElement) {
-        new MediaPipeHandController(viewer, webcamElement);
-    }
-});*/
